@@ -84,7 +84,7 @@ class ResizeCenterCropper(nn.Module):
                     and observation_space.spaces[key].shape != size
                 ):
                     logger.info(
-                        "Overwriting CNN input size of %s: %s" % (key, size)
+                        "Overwriting CNN input size of %s: from %s to %s" % (key, observation_space.spaces[key].shape, size)
                     )
                     observation_space.spaces[key] = overwrite_gym_box_shape(
                         observation_space.spaces[key], size
