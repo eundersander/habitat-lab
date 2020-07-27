@@ -14,14 +14,23 @@ def example():
         config=habitat.get_config("configs/tasks/pointnav.yaml")
     ) as env:
         print("Environment creation successful")
-        observations = env.reset()
 
-        print("Agent stepping around inside environment.")
-        count_steps = 0
-        while not env.episode_over:
-            observations = env.step(env.action_space.sample())
-            count_steps += 1
-        print("Episode finished after {} steps.".format(count_steps))
+        count_episodes = 0
+        while count_episodes < 8:
+            observations = env.reset()
+
+            print("Agent stepping around inside environment.")
+            count_steps = 0
+            while not env.episode_over:
+                while True:
+                    action = env.action_space.sample()
+                    if count_steps >= 1000 or action['action'] != 'STOP':
+                        break
+                # print("action: {}".format(action))
+                observations = env.step(action)
+                count_steps += 1
+            print("Episode finished after {} steps.".format(count_steps))
+            count_episodes += 1
 
     env.close()
 
