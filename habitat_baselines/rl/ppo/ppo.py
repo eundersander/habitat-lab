@@ -72,6 +72,9 @@ class PPO(nn.Module):
             )
 
             for sample in data_generator:
+
+                torch.cuda.nvtx.range_push("get PPO loss? todo: better name")
+
                 (
                     obs_batch,
                     recurrent_hidden_states_batch,
@@ -132,13 +135,21 @@ class PPO(nn.Module):
                     - dist_entropy * self.entropy_coef
                 )
 
+                torch.cuda.nvtx.range_pop()
+
+                torch.cuda.nvtx.range_push("backward")
                 self.before_backward(total_loss)
                 total_loss.backward()
                 self.after_backward(total_loss)
+                torch.cuda.nvtx.range_pop()
+
+                torch.cuda.nvtx.range_push("optimizer step")
 
                 self.before_step()
                 self.optimizer.step()
                 self.after_step()
+
+                torch.cuda.nvtx.range_pop()
 
                 value_loss_epoch += value_loss.item()
                 action_loss_epoch += action_loss.item()

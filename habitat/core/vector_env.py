@@ -31,6 +31,8 @@ from habitat.core.env import Env, Observations, RLEnv
 from habitat.core.logging import logger
 from habitat.core.utils import tile_images
 
+import torch
+
 try:
     # Use torch.multiprocessing if we can.
     # We have yet to find a reason to not use it and
@@ -246,7 +248,9 @@ class VectorEnv:
                 else:
                     raise NotImplementedError
 
+                torch.cuda.nvtx.range_push("_worker_env wait for command")
                 command, data = connection_read_fn()
+                torch.cuda.nvtx.range_pop()
 
             if child_pipe is not None:
                 child_pipe.close()
@@ -387,10 +391,14 @@ class VectorEnv:
     def wait_step(self) -> List[Observations]:
         r"""Wait until all the asynchronized environments have synchronized.
         """
+        torch.cuda.nvtx.range_push("VectorEnv.wait_step")
+
         observations = []
         for read_fn in self._connection_read_fns:
             observations.append(read_fn())
         self._is_waiting = False
+
+        torch.cuda.nvtx.range_pop()
         return observations
 
     def step(self, data: List[Union[int, str, Dict[str, Any]]]) -> List[Any]:

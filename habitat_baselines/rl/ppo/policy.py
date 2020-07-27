@@ -41,6 +41,8 @@ class Policy(nn.Module):
         masks,
         deterministic=False,
     ):
+        torch.cuda.nvtx.range_push("Policy.act")
+
         features, rnn_hidden_states = self.net(
             observations, rnn_hidden_states, prev_actions, masks
         )
@@ -53,6 +55,8 @@ class Policy(nn.Module):
             action = distribution.sample()
 
         action_log_probs = distribution.log_probs(action)
+
+        torch.cuda.nvtx.range_pop()
 
         return value, action, action_log_probs, rnn_hidden_states
 

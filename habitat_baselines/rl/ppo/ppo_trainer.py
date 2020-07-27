@@ -157,6 +157,9 @@ class PPOTrainer(BaseRLTrainer):
     def _collect_rollout_step(
         self, rollouts, current_episode_reward, running_episode_stats
     ):
+
+        torch.cuda.nvtx.range_push("_collect_rollout_step")
+
         pth_time = 0.0
         env_time = 0.0
 
@@ -233,9 +236,16 @@ class PPOTrainer(BaseRLTrainer):
 
         pth_time += time.time() - t_update_stats
 
+        torch.cuda.nvtx.range_pop()
+
         return pth_time, env_time, self.envs.num_envs
 
     def _update_agent(self, ppo_cfg, rollouts):
+
+        torch.cuda.nvtx.range_push("PPOTrainer._update_agent")
+
+        torch.cuda.nvtx.range_push("do rollouts?")
+
         t_update_model = time.time()
         with torch.no_grad():
             last_observation = {
@@ -252,9 +262,13 @@ class PPOTrainer(BaseRLTrainer):
             next_value, ppo_cfg.use_gae, ppo_cfg.gamma, ppo_cfg.tau
         )
 
+        torch.cuda.nvtx.range_pop()
+
         value_loss, action_loss, dist_entropy = self.agent.update(rollouts)
 
         rollouts.after_update()
+
+        torch.cuda.nvtx.range_pop()
 
         return (
             time.time() - t_update_model,
@@ -330,10 +344,23 @@ class PPOTrainer(BaseRLTrainer):
             lr_lambda=lambda x: linear_decay(x, self.config.NUM_UPDATES),
         )
 
+        # import pyprof2
+        # pyprof2.init()
+
+        import contextlib
+        # with contextlib.suppress():
+        # with torch.autograd.profiler.emit_nvtx():
+        # with torch.autograd.profiler.profile(enabled=True, use_cuda=True) as prof:
+
+        # torch.cuda.profiler.start()
+
         with TensorboardWriter(
             self.config.TENSORBOARD_DIR, flush_secs=self.flush_secs
         ) as writer:
             for update in range(self.config.NUM_UPDATES):
+
+                torch.cuda.nvtx.range_push("train loop body")
+
                 if ppo_cfg.use_linear_lr_decay:
                     lr_scheduler.step()
 
@@ -429,7 +456,14 @@ class PPOTrainer(BaseRLTrainer):
                     )
                     count_checkpoints += 1
 
+                torch.cuda.nvtx.range_pop()
+
             self.envs.close()
+
+        # torch.cuda.profiler.stop()
+
+        # prof.export_chrome_trace("my_chrome_trace.trace")
+        #torch.autograd.profiler.table()
 
     def _eval_checkpoint(
         self,

@@ -50,6 +50,8 @@ def run_exp(exp_config: str, run_type: str, opts=None) -> None:
     Returns:
         None.
     """
+    torch.cuda.nvtx.range_push("run_exp")
+
     config = get_config(exp_config, opts)
 
     random.seed(config.TASK_CONFIG.SEED)
@@ -65,6 +67,7 @@ def run_exp(exp_config: str, run_type: str, opts=None) -> None:
     elif run_type == "eval":
         trainer.eval()
 
+    torch.cuda.nvtx.range_pop()
 
 if __name__ == "__main__":
     main()

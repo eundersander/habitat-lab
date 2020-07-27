@@ -100,6 +100,8 @@ class RolloutStorage:
         self.step = self.step + 1
 
     def after_update(self):
+        torch.cuda.nvtx.range_push("after_update")
+
         for sensor in self.observations:
             self.observations[sensor][0].copy_(
                 self.observations[sensor][self.step]
@@ -111,6 +113,9 @@ class RolloutStorage:
         self.masks[0].copy_(self.masks[self.step])
         self.prev_actions[0].copy_(self.prev_actions[self.step])
         self.step = 0
+
+        torch.cuda.nvtx.range_pop()
+
 
     def compute_returns(self, next_value, use_gae, gamma, tau):
         if use_gae:

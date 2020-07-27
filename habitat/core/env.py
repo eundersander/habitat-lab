@@ -21,6 +21,7 @@ from habitat.datasets import make_dataset
 from habitat.sims import make_sim
 from habitat.tasks import make_task
 
+import torch
 
 class Env:
     r"""Fundamental environment class for :ref:`habitat`.
@@ -238,6 +239,9 @@ class Env:
     def step(
         self, action: Union[int, str, Dict[str, Any]], **kwargs
     ) -> Observations:
+
+        torch.cuda.nvtx.range_push("env.py step")
+
         r"""Perform an action in the environment and return observations.
 
         :param action: action (belonging to :ref:`action_space`) to be
@@ -263,11 +267,19 @@ class Env:
             action=action, episode=self.current_episode
         )
 
+        torch.cuda.nvtx.range_push("update_measures")
+
         self._task.measurements.update_measures(
             episode=self.current_episode, action=action, task=self.task
         )
 
+        torch.cuda.nvtx.range_pop()
+        torch.cuda.nvtx.range_push("_update_step_stats")
+
         self._update_step_stats()
+
+        torch.cuda.nvtx.range_pop()
+        torch.cuda.nvtx.range_pop()
 
         return observations
 
@@ -354,7 +366,10 @@ class RLEnv(gym.Env):
         self._env.episodes = episodes
 
     def reset(self) -> Observations:
-        return self._env.reset()
+        torch.cuda.nvtx.range_push("RLEnv reset")
+        retval = self._env.reset()
+        torch.cuda.nvtx.range_pop()
+        return retval
 
     def get_reward_range(self):
         r"""Get min, max range of reward.
@@ -398,10 +413,14 @@ class RLEnv(gym.Env):
         :return: :py:`(observations, reward, done, info)`
         """
 
+        torch.cuda.nvtx.range_push("RLEnv step")
         observations = self._env.step(*args, **kwargs)
+        torch.cuda.nvtx.range_push("other step stuff")
         reward = self.get_reward(observations)
         done = self.get_done(observations)
         info = self.get_info(observations)
+        torch.cuda.nvtx.range_pop()
+        torch.cuda.nvtx.range_pop()
 
         return observations, reward, done, info
 

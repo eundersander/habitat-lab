@@ -26,6 +26,8 @@ from habitat.core.simulator import (
 )
 from habitat.core.spaces import Space
 
+import torch
+
 RGBSENSOR_DIMENSION = 3
 
 
@@ -252,20 +254,32 @@ class HabitatSim(habitat_sim.Simulator, Simulator):
         return is_updated
 
     def reset(self):
-        sim_obs = super().reset()
+        torch.cuda.nvtx.range_push("HabitatSim.reset")
+        sim_obs = sim_obs = super().reset()
         if self._update_agents_state():
             sim_obs = self.get_sensor_observations()
 
         self._prev_sim_obs = sim_obs
-        return self._sensor_suite.get_observations(sim_obs)
+        ret_val = self._sensor_suite.get_observations(sim_obs)
+        torch.cuda.nvtx.range_pop()
+        return ret_val
 
     def step(self, action):
+        torch.cuda.nvtx.range_push("HabitatSim.step")
+        torch.cuda.nvtx.range_push("_sim.step")
         sim_obs = super().step(action)
+        torch.cuda.nvtx.range_pop()
         self._prev_sim_obs = sim_obs
+        torch.cuda.nvtx.range_push("_sensor_suite.get_observations")
         observations = self._sensor_suite.get_observations(sim_obs)
+        torch.cuda.nvtx.range_pop()
+        torch.cuda.nvtx.range_pop()
         return observations
 
     def render(self, mode: str = "rgb") -> Any:
+
+        torch.cuda.nvtx.range_push("HabitatSim.render")
+
         r"""
         Args:
             mode: sensor whose observation is used for returning the frame,
@@ -283,6 +297,8 @@ class HabitatSim(habitat_sim.Simulator, Simulator):
             # If it is not a numpy array, it is a torch tensor
             # The function expects the result to be a numpy array
             output = output.to("cpu").numpy()
+
+        torch.cuda.nvtx.range_pop()
 
         return output
 
