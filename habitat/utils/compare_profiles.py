@@ -1,8 +1,7 @@
 
-
 import sqlite3
 import glob, os
-
+import argparse
 
 class Event:
     def __init__(self, name, thread_id, start, end):
@@ -98,13 +97,18 @@ def create_summary_from_events(events):
     return items
 
 
-def display_time_ms(time):
+def display_time_ms(time, show_sign=False):
 
     # assume times from profiles are nanoseconds
-    return "{:,.0f}".format(time / (1000 * 1000))
+    return "{}{:,.0f}".format(
+        "+" if time > 0 and show_sign else "",
+        time / (1000 * 1000))
     # return time
 
-def print_summaries(summaries, labels=None, sort_by_exclusive=False):
+def print_summaries(summaries, args, labels=None):
+
+    sort_by_exclusive = args.sort_by == "exclusive"
+    print_relative_timings = args.relative
 
     if len(summaries) == 0:
         print("no summaries to print")
@@ -143,14 +147,30 @@ def print_summaries(summaries, labels=None, sort_by_exclusive=False):
         name = tup[0]
         print(name.ljust(max_name_len + column_pad), end='')
 
-        for summary in summaries:
+        for (index, summary) in enumerate(summaries):
+
+            base_summary = summaries[0] if index > 0 else None
 
             if name in summary:
 
                 item = summary[name]
-                print(display_time_ms(item._time_inclusive).rjust(time_width).ljust(time_width + column_pad)
-                    + display_time_ms(item._time_exclusive).rjust(time_width).ljust(time_width + column_pad),
+
+                if base_summary and print_relative_timings and name in base_summary:
+
+                    base_item = base_summary[name]
+                    time_inclusive = item._time_inclusive - base_item._time_inclusive
+                    time_exclusive = item._time_exclusive - base_item._time_exclusive
+                    show_sign = True
+                else:
+                    time_inclusive = item._time_inclusive
+                    time_exclusive = item._time_exclusive
+                    show_sign = False
+
+                print(display_time_ms(time_inclusive, show_sign=show_sign).rjust(time_width).ljust(time_width + column_pad)
+                    + display_time_ms(time_exclusive, show_sign=show_sign).rjust(time_width).ljust(time_width + column_pad),
                     end='')
+                
+
 
             else:
                 print("-".ljust(time_width + column_pad)
@@ -237,11 +257,21 @@ def test():
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--sort-by",
+        default="inclusive",
+        choices=["inclusive", "exclusive"],
+    )
+    parser.add_argument('--relative', action='store_true', default=False)
+    args = parser.parse_args()
 
     # test()
 
     # temp hard-code
     filepaths = get_sqlite_filepaths_from_directory("./")
+
+    filepaths.sort()  # sort alphabetically; todo: sort by creation date
 
     summaries = []
 
@@ -256,7 +286,7 @@ def main():
 
         summaries.append(create_summary_from_events(events))
 
-    print_summaries(summaries, labels=filepaths)
+    print_summaries(summaries, args, labels=filepaths)
 
 if __name__ == "__main__":
     main()
