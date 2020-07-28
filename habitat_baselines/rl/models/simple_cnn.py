@@ -20,7 +20,7 @@ class SimpleCNN(nn.Module):
         self,
         observation_space,
         output_size,
-        obs_transform: nn.Module = ResizeCenterCropper(size=(256, 256)),
+        obs_transform: nn.Module = ResizeCenterCropper(size=(128, 128)),
     ):
         super().__init__()
 
