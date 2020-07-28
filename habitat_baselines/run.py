@@ -13,6 +13,7 @@ import torch
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.config.default import get_config
 
+from habitat.utils import profiling_utils
 
 def main():
     parser = argparse.ArgumentParser()
@@ -50,6 +51,7 @@ def run_exp(exp_config: str, run_type: str, opts=None) -> None:
     Returns:
         None.
     """
+    profiling_utils.range_push("run_exp")
     config = get_config(exp_config, opts)
 
     random.seed(config.TASK_CONFIG.SEED)
@@ -64,7 +66,7 @@ def run_exp(exp_config: str, run_type: str, opts=None) -> None:
         trainer.train()
     elif run_type == "eval":
         trainer.eval()
-
+    profiling_utils.range_pop()
 
 if __name__ == "__main__":
     main()

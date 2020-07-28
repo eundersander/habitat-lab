@@ -29,6 +29,7 @@ from habitat_baselines.common.utils import (
 )
 from habitat_baselines.rl.ppo import PPO, PointNavBaselinePolicy
 
+from habitat.utils import profiling_utils
 
 @baseline_registry.register_trainer(name="ppo")
 class PPOTrainer(BaseRLTrainer):
@@ -334,6 +335,7 @@ class PPOTrainer(BaseRLTrainer):
             self.config.TENSORBOARD_DIR, flush_secs=self.flush_secs
         ) as writer:
             for update in range(self.config.NUM_UPDATES):
+                profiling_utils.range_push("train loop body")
                 if ppo_cfg.use_linear_lr_decay:
                     lr_scheduler.step()
 
@@ -428,7 +430,7 @@ class PPOTrainer(BaseRLTrainer):
                         f"ckpt.{count_checkpoints}.pth", dict(step=count_steps)
                     )
                     count_checkpoints += 1
-
+                profiling_utils.range_pop()
             self.envs.close()
 
     def _eval_checkpoint(
