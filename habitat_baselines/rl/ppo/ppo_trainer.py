@@ -158,6 +158,7 @@ class PPOTrainer(BaseRLTrainer):
     def _collect_rollout_step(
         self, rollouts, current_episode_reward, running_episode_stats
     ):
+        profiling_utils.range_push("compute actions")
         pth_time = 0.0
         env_time = 0.0
 
@@ -184,6 +185,8 @@ class PPOTrainer(BaseRLTrainer):
 
         t_step_env = time.time()
 
+        profiling_utils.range_pop()  # compute actions
+        profiling_utils.range_push("step envs and collect rewards")
         outputs = self.envs.step([a[0].item() for a in actions])
         observations, rewards, dones, infos = [list(x) for x in zip(*outputs)]
 
@@ -234,9 +237,11 @@ class PPOTrainer(BaseRLTrainer):
 
         pth_time += time.time() - t_update_stats
 
+        profiling_utils.range_pop()  # step envs and collect rewards
         return pth_time, env_time, self.envs.num_envs
 
     def _update_agent(self, ppo_cfg, rollouts):
+        profiling_utils.range_push("_update_agent")
         t_update_model = time.time()
         with torch.no_grad():
             last_observation = {
@@ -257,6 +262,7 @@ class PPOTrainer(BaseRLTrainer):
 
         rollouts.after_update()
 
+        profiling_utils.range_pop()  # _update_agent
         return (
             time.time() - t_update_model,
             value_loss,
@@ -335,7 +341,7 @@ class PPOTrainer(BaseRLTrainer):
             self.config.TENSORBOARD_DIR, flush_secs=self.flush_secs
         ) as writer:
             for update in range(self.config.NUM_UPDATES):
-                profiling_utils.range_push("train loop body")
+                profiling_utils.range_push("training update")
                 if ppo_cfg.use_linear_lr_decay:
                     lr_scheduler.step()
 
@@ -344,6 +350,7 @@ class PPOTrainer(BaseRLTrainer):
                         update, self.config.NUM_UPDATES
                     )
 
+                profiling_utils.range_push("compute trajectories")
                 for step in range(ppo_cfg.num_steps):
                     (
                         delta_pth_time,
@@ -355,6 +362,7 @@ class PPOTrainer(BaseRLTrainer):
                     pth_time += delta_pth_time
                     env_time += delta_env_time
                     count_steps += delta_steps
+                profiling_utils.range_pop()  # compute trajectories
 
                 (
                     delta_pth_time,
@@ -430,7 +438,7 @@ class PPOTrainer(BaseRLTrainer):
                         f"ckpt.{count_checkpoints}.pth", dict(step=count_steps)
                     )
                     count_checkpoints += 1
-                profiling_utils.range_pop()
+                profiling_utils.range_pop()  # training update
             self.envs.close()
 
     def _eval_checkpoint(

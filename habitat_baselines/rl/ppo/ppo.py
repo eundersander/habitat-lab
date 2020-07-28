@@ -7,6 +7,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from habitat.utils import profiling_utils
 
 EPS_PPO = 1e-5
 
@@ -72,6 +73,7 @@ class PPO(nn.Module):
             )
 
             for sample in data_generator:
+                profiling_utils.range_push("compute surrogate loss")
                 (
                     obs_batch,
                     recurrent_hidden_states_batch,
@@ -132,6 +134,8 @@ class PPO(nn.Module):
                     - dist_entropy * self.entropy_coef
                 )
 
+                profiling_utils.range_pop()  #  compute surrogate loss
+                profiling_utils.range_push("backward and optimize")
                 self.before_backward(total_loss)
                 total_loss.backward()
                 self.after_backward(total_loss)
@@ -143,6 +147,7 @@ class PPO(nn.Module):
                 value_loss_epoch += value_loss.item()
                 action_loss_epoch += action_loss.item()
                 dist_entropy_epoch += dist_entropy.item()
+                profiling_utils.range_pop()  # backward and optimize
 
         num_updates = self.ppo_epoch * self.num_mini_batch
 

@@ -66,7 +66,7 @@ def run_exp(exp_config: str, run_type: str, opts=None) -> None:
         trainer.train()
     elif run_type == "eval":
         trainer.eval()
-    profiling_utils.range_pop()
+    profiling_utils.range_pop()  # run_exp
 
 if __name__ == "__main__":
     main()

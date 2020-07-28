@@ -31,6 +31,8 @@ from habitat.core.env import Env, Observations, RLEnv
 from habitat.core.logging import logger
 from habitat.core.utils import tile_images
 
+from habitat.utils import profiling_utils
+
 try:
     # Use torch.multiprocessing if we can.
     # We have yet to find a reason to not use it and
@@ -176,6 +178,7 @@ class VectorEnv:
     ) -> None:
         r"""process worker for creating and interacting with the environment.
         """
+        profiling_utils.range_push("_worker_env")
         if mask_signals:
             signal.signal(signal.SIGINT, signal.SIG_IGN)
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -246,7 +249,9 @@ class VectorEnv:
                 else:
                     raise NotImplementedError
 
+                profiling_utils.range_push("wait for command")
                 command, data = connection_read_fn()
+                profiling_utils.range_pop()  # wait for command
 
             if child_pipe is not None:
                 child_pipe.close()
@@ -254,6 +259,7 @@ class VectorEnv:
             logger.info("Worker KeyboardInterrupt")
         finally:
             env.close()
+        profiling_utils.range_pop()  #_worker_env
 
     def _spawn_workers(
         self,
