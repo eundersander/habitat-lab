@@ -202,6 +202,7 @@ class VectorEnv:
                         if auto_reset_done and done:
                             observations = env.reset()
                         connection_write_fn((observations, reward, done, info))
+                        env._env.post_step(env._previous_action)
                     elif isinstance(env, habitat.Env):
                         # habitat.Env
                         observations = env.step(**data)
