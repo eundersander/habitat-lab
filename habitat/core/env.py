@@ -263,19 +263,22 @@ class Env:
             action=action, episode=self.current_episode
         )
 
-        # self._task.measurements.update_measures(
-        #     episode=self.current_episode, action=action, task=self.task
-        # )
+        if True:
+            self._task.measurements.update_measures(
+                episode=self.current_episode, action=action, task=self.task
+            )
 
         self._update_step_stats()
 
         return observations
 
     def post_step(self, action):
-        self._task.measurements.update_measures(
-            episode=self.current_episode, action=action, task=self.task
-        )
-        # pass
+        if False:
+            self._task.measurements.update_measures(
+                episode=self.current_episode, action=action, task=self.task
+            )
+        else:
+            pass
 
     @staticmethod
     @numba.njit
