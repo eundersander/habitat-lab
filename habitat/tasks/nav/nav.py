@@ -519,11 +519,8 @@ class Success(Measure):
             DistanceToGoal.cls_uuid
         ].get_metric()
 
-        if (
-            hasattr(task, "is_stop_called")
-            and task.is_stop_called
-            and distance_to_target < self._config.SUCCESS_DISTANCE
-        ):
+        # For this tutorial, we've removed the STOP action. See also pointnav.yaml.
+        if distance_to_target < self._config.SUCCESS_DISTANCE:
             self._metric = 1.0
         else:
             self._metric = 0.0
