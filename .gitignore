@@ -87,3 +87,11 @@ data
 
 # vim
 *.swp
+
+# some ignores for profiling
+*.fuse_*
+tb/
+*.sqlite
+*.qdrep
+*.speedscope
+my_*.sh
