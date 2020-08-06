@@ -982,7 +982,7 @@ class DistanceToGoal(Measure):
 
     def get_walkability_score(self, position):
         num_reachable_points = 0
-        max_reachable_points = 256
+        max_reachable_points = 64
         query_range = 10
         # Randomly sample nearby points. Compute the fraction to which we can navigate.
         # Call this fraction our walkability score. This is a contrived, CPU-intensive
