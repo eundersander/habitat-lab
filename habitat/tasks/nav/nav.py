@@ -36,6 +36,8 @@ from habitat.utils.geometry_utils import (
 )
 from habitat.utils.visualizations import fog_of_war, maps
 
+import random
+
 cv2 = try_cv2_import()
 
 
@@ -977,6 +979,22 @@ class DistanceToGoal(Measure):
             ]
         self.update_metric(episode=episode, *args, **kwargs)
 
+    def get_walkability_score(self, position):
+        num_reachable_points = 0
+        max_reachable_points = 256
+        query_range = 10
+        # Randomly sample nearby points. Compute the fraction to which we can navigate.
+        # Call this fraction our walkability score. This is a contrived, CPU-intensive
+        # operation for our profiling tutorial.
+        for i in range(max_reachable_points):
+            query_pos = position + \
+                [random.randrange(-query_range, query_range), 0, random.randrange(-query_range, query_range)]
+            if self._sim.is_navigable_path(position, query_pos):
+                num_reachable_points += 1
+
+        score = num_reachable_points / max_reachable_points
+        return score
+
     def update_metric(self, episode: Episode, *args: Any, **kwargs: Any):
         current_position = self._sim.get_agent_state().position
 
@@ -999,7 +1017,12 @@ class DistanceToGoal(Measure):
                 )
 
             self._previous_position = current_position
-            self._metric = distance_to_target
+
+            # reward agent for staying in high-walkability-score regions
+            walkability_score = self.get_walkability_score(current_position)
+            k = 0.1
+
+            self._metric = distance_to_target + k * walkability_score
 
 
 @registry.register_task_action
