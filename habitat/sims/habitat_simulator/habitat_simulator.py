@@ -25,6 +25,7 @@ from habitat.core.simulator import (
     Simulator,
 )
 from habitat.core.spaces import Space
+from habitat.utils import profiling_utils
 
 RGBSENSOR_DIMENSION = 3
 
@@ -260,9 +261,11 @@ class HabitatSim(habitat_sim.Simulator, Simulator):
         return self._sensor_suite.get_observations(sim_obs)
 
     def step(self, action):
+        profiling_utils.range_push("habitat_simulator.py step")
         sim_obs = super().step(action)
         self._prev_sim_obs = sim_obs
         observations = self._sensor_suite.get_observations(sim_obs)
+        profiling_utils.range_pop()  # habitat_simulator.py step
         return observations
 
     def render(self, mode: str = "rgb") -> Any:

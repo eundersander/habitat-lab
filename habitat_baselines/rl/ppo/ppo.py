@@ -8,6 +8,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+from habitat.utils import profiling_utils
+
 EPS_PPO = 1e-5
 
 
@@ -85,6 +87,7 @@ class PPO(nn.Module):
                 ) = sample
 
                 # Reshape to do in a single forward pass for all steps
+                profiling_utils.range_push("evaluate_actions (for surrogate loss)")
                 (
                     values,
                     action_log_probs,
@@ -97,6 +100,7 @@ class PPO(nn.Module):
                     masks_batch,
                     actions_batch,
                 )
+                profiling_utils.range_pop()  # evaluate_actions (for surrogate loss)
 
                 ratio = torch.exp(
                     action_log_probs - old_action_log_probs_batch
@@ -133,7 +137,9 @@ class PPO(nn.Module):
                 )
 
                 self.before_backward(total_loss)
+                profiling_utils.range_push("backward (for surrogate loss)")
                 total_loss.backward()
+                profiling_utils.range_pop()  # backward (for surrogate loss)
                 self.after_backward(total_loss)
 
                 self.before_step()
@@ -159,9 +165,11 @@ class PPO(nn.Module):
         pass
 
     def before_step(self):
+        profiling_utils.range_push("before_step (for optimize)")
         nn.utils.clip_grad_norm_(
             self.actor_critic.parameters(), self.max_grad_norm
         )
+        profiling_utils.range_pop()  # before_step (for optimize)
 
     def after_step(self):
         pass

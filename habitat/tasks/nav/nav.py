@@ -30,6 +30,7 @@ from habitat.core.simulator import (
 from habitat.core.utils import not_none_validator, try_cv2_import
 from habitat.sims.habitat_simulator.actions import HabitatSimActions
 from habitat.tasks.utils import cartesian_to_polar
+from habitat.utils import profiling_utils
 from habitat.utils.geometry_utils import (
     quaternion_from_coeff,
     quaternion_rotate_vector,
@@ -996,6 +997,7 @@ class DistanceToGoal(Measure):
         return score
 
     def update_metric(self, episode: Episode, *args: Any, **kwargs: Any):
+        profiling_utils.range_push("nav.py update_metric")
         current_position = self._sim.get_agent_state().position
 
         if self._previous_position is None or not np.allclose(
@@ -1023,6 +1025,8 @@ class DistanceToGoal(Measure):
             k = 0.1
 
             self._metric = distance_to_target + k * walkability_score
+
+        profiling_utils.range_pop()  # nav.py update_metric
 
 
 @registry.register_task_action

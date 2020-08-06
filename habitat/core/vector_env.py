@@ -30,6 +30,7 @@ from habitat.config import Config
 from habitat.core.env import Env, Observations, RLEnv
 from habitat.core.logging import logger
 from habitat.core.utils import tile_images
+from habitat.utils import profiling_utils
 
 try:
     # Use torch.multiprocessing if we can.
@@ -176,6 +177,7 @@ class VectorEnv:
     ) -> None:
         r"""process worker for creating and interacting with the environment.
         """
+        profiling_utils.range_push("_worker_env")
         if mask_signals:
             signal.signal(signal.SIGINT, signal.SIG_IGN)
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -198,7 +200,9 @@ class VectorEnv:
                         observations, reward, done, info = env.step(**data)
                         if auto_reset_done and done:
                             observations = env.reset()
+                        profiling_utils.range_push("_worker_env send")
                         connection_write_fn((observations, reward, done, info))
+                        profiling_utils.range_pop()  # _worker_env send
                     elif isinstance(env, habitat.Env):
                         # habitat.Env
                         observations = env.step(**data)
@@ -246,7 +250,9 @@ class VectorEnv:
                 else:
                     raise NotImplementedError
 
+                profiling_utils.range_push("_worker_env recv")
                 command, data = connection_read_fn()
+                profiling_utils.range_pop()  # _worker_env recv
 
             if child_pipe is not None:
                 child_pipe.close()
@@ -254,6 +260,7 @@ class VectorEnv:
             logger.info("Worker KeyboardInterrupt")
         finally:
             env.close()
+        profiling_utils.range_pop()  # _worker_env
 
     def _spawn_workers(
         self,
@@ -387,10 +394,12 @@ class VectorEnv:
     def wait_step(self) -> List[Observations]:
         r"""Wait until all the asynchronized environments have synchronized.
         """
+        profiling_utils.range_push("wait_step")
         observations = []
         for read_fn in self._connection_read_fns:
             observations.append(read_fn())
         self._is_waiting = False
+        profiling_utils.range_pop()  # wait_step
         return observations
 
     def step(self, data: List[Union[int, str, Dict[str, Any]]]) -> List[Any]:

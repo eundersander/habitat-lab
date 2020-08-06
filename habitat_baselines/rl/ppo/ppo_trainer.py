@@ -158,6 +158,7 @@ class PPOTrainer(BaseRLTrainer):
     def _collect_rollout_step(
         self, rollouts, current_episode_reward, running_episode_stats
     ):
+        profiling_utils.range_push("_collect_rollout_step")
         pth_time = 0.0
         env_time = 0.0
 
@@ -168,6 +169,7 @@ class PPOTrainer(BaseRLTrainer):
                 k: v[rollouts.step] for k, v in rollouts.observations.items()
             }
 
+            profiling_utils.range_push("act (run policy)")
             (
                 values,
                 actions,
@@ -179,6 +181,7 @@ class PPOTrainer(BaseRLTrainer):
                 rollouts.prev_actions[rollouts.step],
                 rollouts.masks[rollouts.step],
             )
+            profiling_utils.range_pop()  # act (run policy)
 
         pth_time += time.time() - t_sample_action
 
@@ -234,9 +237,11 @@ class PPOTrainer(BaseRLTrainer):
 
         pth_time += time.time() - t_update_stats
 
+        profiling_utils.range_pop()  # _collect_rollout_step
         return pth_time, env_time, self.envs.num_envs
 
     def _update_agent(self, ppo_cfg, rollouts):
+        profiling_utils.range_push("_update_agent")
         t_update_model = time.time()
         with torch.no_grad():
             last_observation = {
@@ -257,6 +262,7 @@ class PPOTrainer(BaseRLTrainer):
 
         rollouts.after_update()
 
+        profiling_utils.range_pop()  # _update_agent
         return (
             time.time() - t_update_model,
             value_loss,

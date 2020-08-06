@@ -17,6 +17,7 @@ import torch.nn as nn
 from gym.spaces import Box
 
 from habitat import logger
+from habitat.utils import profiling_utils
 from habitat.utils.visualizations.utils import images_to_video
 from habitat_baselines.common.tensorboard_utils import TensorboardWriter
 
@@ -142,6 +143,7 @@ def batch_obs(
     Returns:
         transposed dict of lists of observations.
     """
+    profiling_utils.range_push("batch_obs")
     batch = defaultdict(list)
 
     for obs in observations:
@@ -155,6 +157,7 @@ def batch_obs(
             .to(dtype=torch.float)
         )
 
+    profiling_utils.range_pop()  # batch_obs
     return batch
 
 
