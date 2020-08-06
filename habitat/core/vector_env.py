@@ -203,6 +203,7 @@ class VectorEnv:
                         profiling_utils.range_push("_worker_env send")
                         connection_write_fn((observations, reward, done, info))
                         profiling_utils.range_pop()  # _worker_env send
+                        env._env.post_step(env._previous_action)
                     elif isinstance(env, habitat.Env):
                         # habitat.Env
                         observations = env.step(**data)
