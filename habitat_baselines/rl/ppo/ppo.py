@@ -166,7 +166,9 @@ class PPO(nn.Module):
 
     def before_step(self):
         profiling_utils.range_push("before_step (for optimize)")
-        nn.utils.clip_grad_value_(self.actor_critic.parameters(), 0.1)
+        nn.utils.clip_grad_norm_(
+            self.actor_critic.parameters(), self.max_grad_norm
+        )
         profiling_utils.range_pop()  # before_step (for optimize)
 
     def after_step(self):
