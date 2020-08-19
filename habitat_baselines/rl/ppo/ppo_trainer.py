@@ -15,6 +15,7 @@ import tqdm
 from torch.optim.lr_scheduler import LambdaLR
 
 from habitat import Config, logger
+from habitat.utils import profiling_utils
 from habitat.utils.visualizations.utils import observations_to_image
 from habitat_baselines.common.base_trainer import BaseRLTrainer
 from habitat_baselines.common.baseline_registry import baseline_registry
@@ -76,6 +77,7 @@ class PPOTrainer(BaseRLTrainer):
             use_normalized_advantage=ppo_cfg.use_normalized_advantage,
         )
 
+    @profiling_utils.RangeContext("save_checkpoint")
     def save_checkpoint(
         self, file_name: str, extra_state: Optional[Dict] = None
     ) -> None:
@@ -151,6 +153,7 @@ class PPOTrainer(BaseRLTrainer):
 
         return results
 
+    @profiling_utils.RangeContext("_collect_rollout_step")
     def _collect_rollout_step(
         self, rollouts, current_episode_reward, running_episode_stats
     ):
@@ -232,6 +235,7 @@ class PPOTrainer(BaseRLTrainer):
 
         return pth_time, env_time, self.envs.num_envs
 
+    @profiling_utils.RangeContext("_update_agent")
     def _update_agent(self, ppo_cfg, rollouts):
         t_update_model = time.time()
         with torch.no_grad():
@@ -339,6 +343,7 @@ class PPOTrainer(BaseRLTrainer):
                         update, self.config.NUM_UPDATES
                     )
 
+                profiling_utils.range_push("rollouts loop")
                 for _step in range(ppo_cfg.num_steps):
                     (
                         delta_pth_time,
@@ -350,6 +355,7 @@ class PPOTrainer(BaseRLTrainer):
                     pth_time += delta_pth_time
                     env_time += delta_env_time
                     count_steps += delta_steps
+                profiling_utils.range_pop()  # rollouts loop
 
                 (
                     delta_pth_time,
@@ -359,6 +365,7 @@ class PPOTrainer(BaseRLTrainer):
                 ) = self._update_agent(ppo_cfg, rollouts)
                 pth_time += delta_pth_time
 
+                profiling_utils.range_push("record metrics")
                 for k, v in running_episode_stats.items():
                     window_episode_stats[k].append(v.clone())
 
@@ -418,6 +425,8 @@ class PPOTrainer(BaseRLTrainer):
                             ),
                         )
                     )
+
+                profiling_utils.range_pop()  # record metrics
 
                 # checkpoint model
                 if update % self.config.CHECKPOINT_INTERVAL == 0:

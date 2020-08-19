@@ -30,6 +30,7 @@ from habitat.config import Config
 from habitat.core.env import Env, Observations, RLEnv
 from habitat.core.logging import logger
 from habitat.core.utils import tile_images
+from habitat.utils import profiling_utils
 
 try:
     # Use torch.multiprocessing if we can.
@@ -163,6 +164,7 @@ class VectorEnv:
         return self._num_envs - len(self._paused)
 
     @staticmethod
+    @profiling_utils.RangeContext("_worker_env")
     def _worker_env(
         connection_read_fn: Callable,
         connection_write_fn: Callable,
@@ -196,7 +198,12 @@ class VectorEnv:
                         observations, reward, done, info = env.step(**data)
                         if auto_reset_done and done:
                             observations = env.reset()
-                        connection_write_fn((observations, reward, done, info))
+                        with profiling_utils.RangeContext(
+                            "connection_write_fn"
+                        ):
+                            connection_write_fn(
+                                (observations, reward, done, info)
+                            )
                     elif isinstance(env, habitat.Env):
                         # habitat.Env
                         observations = env.step(**data)

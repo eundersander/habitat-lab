@@ -14,6 +14,7 @@ from habitat.tasks.nav.nav import (
     IntegratedPointGoalGPSAndCompassSensor,
     PointGoalSensor,
 )
+from habitat.utils import profiling_utils
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.common.utils import CategoricalNet
 from habitat_baselines.rl.models.rnn_state_encoder import RNNStateEncoder
@@ -34,6 +35,7 @@ class Policy(nn.Module, metaclass=abc.ABCMeta):
     def forward(self, *x):
         raise NotImplementedError
 
+    @profiling_utils.RangeContext("Policy.act")
     def act(
         self,
         observations,

@@ -19,6 +19,7 @@ from torch import nn as nn
 from torch.optim.lr_scheduler import LambdaLR
 
 from habitat import Config, logger
+from habitat.utils import profiling_utils
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.common.env_utils import construct_envs
 from habitat_baselines.common.environments import get_env_class
@@ -120,12 +121,14 @@ class DDPPOTrainer(PPOTrainer):
             use_normalized_advantage=ppo_cfg.use_normalized_advantage,
         )
 
+    @profiling_utils.RangeContext("train")
     def train(self) -> None:
         r"""Main method for DD-PPO.
 
         Returns:
             None
         """
+        profiling_utils.range_push("train init")
         self.local_rank, tcp_store = init_distrib_slurm(
             self.config.RL.DDPPO.distrib_backend
         )
@@ -272,7 +275,11 @@ class DDPPOTrainer(PPOTrainer):
             if self.world_rank == 0
             else contextlib.suppress()
         ) as writer:
+
+            profiling_utils.range_pop()  # train init
+
             for update in range(start_update, self.config.NUM_UPDATES):
+                profiling_utils.range_push("train update")
                 if ppo_cfg.use_linear_lr_decay:
                     lr_scheduler.step()
 
@@ -282,6 +289,8 @@ class DDPPOTrainer(PPOTrainer):
                     )
 
                 if EXIT.is_set():
+                    profiling_utils.range_pop()  # train update
+
                     self.envs.close()
 
                     if REQUEUE.is_set() and self.world_rank == 0:
@@ -308,6 +317,7 @@ class DDPPOTrainer(PPOTrainer):
 
                 count_steps_delta = 0
                 self.agent.eval()
+                profiling_utils.range_push("rollouts loop")
                 for step in range(ppo_cfg.num_steps):
 
                     (
@@ -330,6 +340,7 @@ class DDPPOTrainer(PPOTrainer):
                         self.config.RL.DDPPO.sync_frac * self.world_size
                     ):
                         break
+                profiling_utils.range_pop()  # rollouts loop
 
                 num_rollouts_done_store.add("num_done", 1)
 
@@ -362,6 +373,8 @@ class DDPPOTrainer(PPOTrainer):
                 count_steps += stats[2].item()
 
                 if self.world_rank == 0:
+                    profiling_utils.range_push("record metrics")
+
                     num_rollouts_done_store.set("num_done", "0")
 
                     losses = [
@@ -427,6 +440,8 @@ class DDPPOTrainer(PPOTrainer):
                             )
                         )
 
+                    profiling_utils.range_pop()  # record metrics
+
                     # checkpoint model
                     if update % self.config.CHECKPOINT_INTERVAL == 0:
                         self.save_checkpoint(
@@ -434,5 +449,7 @@ class DDPPOTrainer(PPOTrainer):
                             dict(step=count_steps),
                         )
                         count_checkpoints += 1
+
+                profiling_utils.range_pop()  # train update
 
             self.envs.close()
