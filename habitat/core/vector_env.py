@@ -251,7 +251,8 @@ class VectorEnv:
                 else:
                     raise NotImplementedError
 
-                command, data = connection_read_fn()
+                with profiling_utils.RangeContext("connection_read_fn"):
+                    command, data = connection_read_fn()
 
             if child_pipe is not None:
                 child_pipe.close()

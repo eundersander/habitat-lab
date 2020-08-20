@@ -24,6 +24,7 @@ from habitat.core.simulator import (
     Simulator,
 )
 from habitat.core.spaces import Space
+from habitat.utils import profiling_utils
 
 RGBSENSOR_DIMENSION = 3
 
@@ -250,6 +251,7 @@ class HabitatSim(habitat_sim.Simulator, Simulator):
 
         return is_updated
 
+    @profiling_utils.RangeContext("HabitatSim.reset")
     def reset(self):
         sim_obs = super().reset()
         if self._update_agents_state():
