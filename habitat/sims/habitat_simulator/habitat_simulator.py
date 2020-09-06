@@ -24,7 +24,7 @@ from habitat.core.simulator import (
     Simulator,
 )
 from habitat.core.spaces import Space
-from habitat.utils import profiling_utils
+from habitat_sim.utils import profiling_utils
 
 RGBSENSOR_DIMENSION = 3
 

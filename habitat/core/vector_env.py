@@ -30,7 +30,7 @@ from habitat.config import Config
 from habitat.core.env import Env, Observations, RLEnv
 from habitat.core.logging import logger
 from habitat.core.utils import tile_images
-from habitat.utils import profiling_utils
+from habitat_sim.utils import profiling_utils
 
 try:
     # Use torch.multiprocessing if we can.

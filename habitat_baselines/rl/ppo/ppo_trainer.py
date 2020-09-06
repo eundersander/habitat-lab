@@ -15,7 +15,6 @@ import tqdm
 from torch.optim.lr_scheduler import LambdaLR
 
 from habitat import Config, logger
-from habitat.utils import profiling_utils
 from habitat.utils.visualizations.utils import observations_to_image
 from habitat_baselines.common.base_trainer import BaseRLTrainer
 from habitat_baselines.common.baseline_registry import baseline_registry
@@ -29,6 +28,7 @@ from habitat_baselines.common.utils import (
     linear_decay,
 )
 from habitat_baselines.rl.ppo import PPO
+from habitat_sim.utils import profiling_utils
 
 
 @baseline_registry.register_trainer(name="ppo")

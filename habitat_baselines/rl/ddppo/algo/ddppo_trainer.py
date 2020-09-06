@@ -19,7 +19,6 @@ from torch import nn as nn
 from torch.optim.lr_scheduler import LambdaLR
 
 from habitat import Config, logger
-from habitat.utils import profiling_utils
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.common.env_utils import construct_envs
 from habitat_baselines.common.environments import get_env_class
@@ -40,6 +39,7 @@ from habitat_baselines.rl.ddppo.policy.resnet_policy import (  # noqa: F401
     PointNavResNetPolicy,
 )
 from habitat_baselines.rl.ppo.ppo_trainer import PPOTrainer
+from habitat_sim.utils import profiling_utils
 
 
 @baseline_registry.register_trainer(name="ddppo")
@@ -128,11 +128,15 @@ class DDPPOTrainer(PPOTrainer):
         Returns:
             None
         """
-        profiling_utils.range_push("train init")
+
         self.local_rank, tcp_store = init_distrib_slurm(
             self.config.RL.DDPPO.distrib_backend
         )
         add_signal_handlers()
+        profiling_utils.configure(
+            capture_start_step=self.config.PROFILING.CAPTURE_START_STEP,
+            num_steps_to_capture=self.config.PROFILING.NUM_STEPS_TO_CAPTURE,
+        )
 
         # Stores the number of workers that have finished their rollout
         num_rollouts_done_store = distrib.PrefixStore(
@@ -276,9 +280,10 @@ class DDPPOTrainer(PPOTrainer):
             else contextlib.suppress()
         ) as writer:
 
-            profiling_utils.range_pop()  # train init
-
             for update in range(start_update, self.config.NUM_UPDATES):
+
+                profiling_utils.on_start_step()
+
                 profiling_utils.range_push("train update")
                 if ppo_cfg.use_linear_lr_decay:
                     lr_scheduler.step()
