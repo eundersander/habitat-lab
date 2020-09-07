@@ -44,13 +44,11 @@ if __name__ == "__main__":
         # todo: create if necessary
         profile_output_folder = "profiles"
 
-        # You must use ${SLURM_NODEID} and ${SLURM_LOCALID} if using capture_all_tasks. Use $1 for slurm job id (optional).
-        profile_output_filename_base = (
-            "profile_job$1_node${SLURM_NODEID}_local${SLURM_LOCALID}"
-        )
+        # You must use ${SLURM_NODEID} and ${SLURM_LOCALID} if using capture_all_tasks so that each profile gets a unique name. Use of ${SLURM_JOB_ID} is optional.
+        profile_output_filename_base = "profile_job${SLURM_JOB_ID}_node${SLURM_NODEID}_local${SLURM_LOCALID}"
     else:
         profile_output_folder = "/home/eundersander/projects/profiling/temp"
-        profile_output_filename_base = "my_profile"
+        profile_output_filename_base = "my_profile_opengl"
 
     if do_slurm:
         # A job duration to provide to slurm
@@ -59,7 +57,7 @@ if __name__ == "__main__":
         #   startup time is 2 minutes and 100 steps takes 12 minutes
         if do_capture_step_range:
             slurm_job_termination_minutes = 10 + int(
-                num_steps_to_capture * 15 / 100
+                capture_start_step + num_steps_to_capture * 15 / 100
             )
         else:
             slurm_job_termination_minutes = (
@@ -72,7 +70,7 @@ if __name__ == "__main__":
     capture_cuda = False  # beware large profile storage requirement
 
     # Beware, support is poor on FAIR cluster and Colab machines due to older Nvidia drivers. For best OpenGL profiling, profile your desktop linux machine using the Nsight Systems GUI, not the nsys command-line tool.
-    capture_opengl = False
+    capture_opengl = True
 
     # nsys produces a .qdrep multithreaded trace file which can be viewed in the Nsight GUI. Optionally, it can export a .sqlite database file for use with habitat's compare_profiles.py.
     export_sqlite = False
@@ -162,7 +160,7 @@ export GLOG_minloglevel=2
 export MAGNUM_LOG=quiet
 export MASTER_ADDR=$(srun --ntasks=1 hostname 2>&1 | tail -n1)
 set -x
-srun capture_profile_slurm_task.sh %j
+srun capture_profile_slurm_task.sh
 """
         )
 
@@ -181,16 +179,16 @@ srun capture_profile_slurm_task.sh %j
         print("created " + profile_output_folder)
 
     if do_slurm:
-        with open("slurm_task.sh", "w") as f:
+        with open("capture_profile_slurm_task.sh", "w") as f:
             f.write(slurm_task_str)
-        print("wrote slurm_task.sh")
+        print("wrote capture_profile_slurm_task.sh")
 
         with open("capture_profile_slurm.sh", "w") as f:
             f.write(slurm_submit_str)
         print("wrote capture_profile_slurm.sh")
 
         print(
-            "\nTo start capture, do:\nchmod +x slurm_task.sh\nchmod +x capture_profile_slurm.sh\nsbatch capture_profile_slurm.sh"
+            "\nTo start capture, do:\nchmod +x capture_profile_slurm_task.sh\nchmod +x capture_profile_slurm.sh\nsbatch capture_profile_slurm.sh"
         )
 
     else:
