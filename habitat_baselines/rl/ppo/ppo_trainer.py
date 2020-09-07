@@ -167,6 +167,7 @@ class PPOTrainer(BaseRLTrainer):
                 k: v[rollouts.step] for k, v in rollouts.observations.items()
             }
 
+            profiling_utils.range_push("compute actions")
             (
                 values,
                 actions,
@@ -183,7 +184,10 @@ class PPOTrainer(BaseRLTrainer):
 
         t_step_env = time.time()
 
-        outputs = self.envs.step([a[0].item() for a in actions])
+        step_data = [a[0].item() for a in actions]
+        profiling_utils.range_pop()  # compute actions
+
+        outputs = self.envs.step(step_data)
         observations, rewards, dones, infos = [list(x) for x in zip(*outputs)]
 
         env_time += time.time() - t_step_env

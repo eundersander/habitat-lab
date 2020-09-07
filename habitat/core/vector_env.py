@@ -199,7 +199,7 @@ class VectorEnv:
                         if auto_reset_done and done:
                             observations = env.reset()
                         with profiling_utils.RangeContext(
-                            "connection_write_fn"
+                            "worker write after step"
                         ):
                             connection_write_fn(
                                 (observations, reward, done, info)
@@ -251,7 +251,7 @@ class VectorEnv:
                 else:
                     raise NotImplementedError
 
-                with profiling_utils.RangeContext("connection_read_fn"):
+                with profiling_utils.RangeContext("worker wait for command"):
                     command, data = connection_read_fn()
 
             if child_pipe is not None:
@@ -390,6 +390,7 @@ class VectorEnv:
         for write_fn, args in zip(self._connection_write_fns, data):
             write_fn((STEP_COMMAND, args))
 
+    @profiling_utils.RangeContext("wait_step")
     def wait_step(self) -> List[Observations]:
         r"""Wait until all the asynchronized environments have synchronized."""
         observations = []
