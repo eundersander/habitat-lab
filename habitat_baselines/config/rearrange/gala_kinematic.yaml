@@ -29,8 +29,8 @@ RL:
     max_grad_norm: 0.5
     num_mini_batch: 2
   POLICY:
-    name: "PointNavBaselinePolicy"
+    name: "PointNavResNetPolicy"
     action_distribution_type: "gaussian"
   DDPPO:
-    backbone: "PointNavResNetPolicy"
+    backbone: "se_resnet9_fixup"
 FORCE_BLIND_POLICY: False
