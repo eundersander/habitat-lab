@@ -174,18 +174,21 @@ def load_resume_state(filename_or_config: Union[Config, str]) -> Optional[Any]:
 
     :return: The saved state if the file exists, else none
     """
-    if isinstance(filename_or_config, Config):
-        filename = resume_state_filename(filename_or_config)
-    else:
-        filename = filename_or_config
 
-    if not osp.exists(filename):
-        return None
+    pass  # temp hack disable loading from resume state
 
-    if rank0_only():
-        logger.info(f"Loading resume state: {filename}")
+    # if isinstance(filename_or_config, Config):
+    #     filename = resume_state_filename(filename_or_config)
+    # else:
+    #     filename = filename_or_config
 
-    return torch.load(filename, map_location="cpu")
+    # if not osp.exists(filename):
+    #     return None
+
+    # if rank0_only():
+    #     logger.info(f"Loading resume state: {filename}")
+
+    # return torch.load(filename, map_location="cpu")
 
 
 def requeue_job():
