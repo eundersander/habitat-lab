@@ -77,6 +77,13 @@ def run_exp(exp_config: str, run_type: str, opts=None) -> None:
     Returns:
         None.
     """
+
+    # temp hack
+    exp_config_local = (
+        "habitat_baselines/config/rearrange/gala_kinematic_local.yaml"
+    )
+    exp_config = [exp_config, exp_config_local]
+
     config = get_config(exp_config, opts)
     execute_exp(config, run_type)
 
