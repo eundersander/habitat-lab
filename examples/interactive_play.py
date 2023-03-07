@@ -496,6 +496,59 @@ class GuiHumanoidController(Controller):
         )
 
 
+class ControllerHelper:
+    def __init__(self, env, args):
+        self.n_robots = len(env._sim.robots_mgr)
+        is_multi_agent = self.n_robots > 1
+
+        self.env = env
+
+        gui_controller: Controller = None
+        if args.use_humanoid_controller:
+            gui_controller = GuiHumanoidController(
+                0, is_multi_agent, env, args.walk_pose_path
+            )
+        else:
+            gui_controller = HumanController(0, is_multi_agent)
+
+        self.controllers = []
+        self.n_robots = self.n_robots
+        self.all_hxs = [None for _ in range(self.n_robots)]
+        self.active_controllers = [0, 1]
+        self.controllers = [
+            gui_controller,
+            BaselinesController(
+                1,
+                is_multi_agent,
+                "habitat-baselines/habitat_baselines/config/rearrange/rl_hierarchical.yaml",
+                env,
+            ),
+        ]
+
+    def update(self, obs):
+        all_names = []
+        all_args = {}
+        end_play = False
+        reset_ep = False
+        for i in self.active_controllers:
+            (
+                ctrl_action,
+                ctrl_reset_ep,
+                ctrl_end_play,
+                self.all_hxs[i],
+            ) = self.controllers[i].act(obs, self.env)
+            end_play = end_play or ctrl_end_play
+            reset_ep = reset_ep or ctrl_reset_ep
+            all_names.extend(ctrl_action["action"])
+            all_args.update(ctrl_action["action_args"])
+        action = {"action": tuple(all_names), "action_args": all_args}
+        return action, end_play, reset_ep
+
+    def on_environment_reset(self):
+        for i in self.active_controllers:
+            self.controllers[i].on_environment_reset()
+
+
 def play_env(env, args, config):
     render_steps_limit = None
     if args.no_render:
@@ -519,37 +572,15 @@ def play_env(env, args, config):
     gfx_measure = env.task.measurements.measures.get(
         GfxReplayMeasure.cls_uuid, None
     )
-    is_multi_agent = len(env._sim.agents_mgr) > 1
 
-    gui_controller: Controller = None
-    if args.use_humanoid_controller:
-        gui_controller = GuiHumanoidController(
-            0, is_multi_agent, env, args.walk_pose_path
-        )
-    else:
-        gui_controller = HumanController(0, is_multi_agent)
-    controllers = []
-    n_robots = len(env._sim.agents_mgr)
-    all_hxs = [None for _ in range(n_robots)]
-    active_controllers = [0, 1]
-    controllers = [
-        gui_controller,
-        BaselinesController(
-            1,
-            is_multi_agent,
-            "habitat-baselines/habitat_baselines/config/rearrange/rl_hierarchical.yaml",
-            env,
-        ),
-    ]
+    ctrl_helper = ControllerHelper(env, args)
 
-    for i in active_controllers:
-        controllers[i].on_environment_reset()
+    ctrl_helper.on_environment_reset()
 
     def reset_helper():
         nonlocal total_reward
         env.reset()
-        for i in active_controllers:
-            controllers[i].on_environment_reset()
+        ctrl_helper.on_environment_reset()
         total_reward = 0
 
     while True:
@@ -559,9 +590,11 @@ def play_env(env, args, config):
         keys = pygame.key.get_pressed()
 
         if not args.no_render and keys[pygame.K_x]:
-            active_controllers[0] = (active_controllers[0] + 1) % n_robots
+            ctrl_helper.active_controllers[0] = (
+                ctrl_helper.active_controllers[0] + 1
+            ) % ctrl_helper.n_robots
             logger.info(
-                f"Controlled agent changed. Controlling agent {active_controllers[0]}."
+                f"Controlled agent changed. Controlling agent {ctrl_helper.active_controllers[0]}."
             )
 
         end_play = False
@@ -569,20 +602,7 @@ def play_env(env, args, config):
         if args.no_render:
             action = {"action": "empty", "action_args": {}}
         else:
-            all_names = []
-            all_args = {}
-            for i in active_controllers:
-                (
-                    ctrl_action,
-                    ctrl_reset_ep,
-                    ctrl_end_play,
-                    all_hxs[i],
-                ) = controllers[i].act(obs, env)
-                end_play = end_play or ctrl_end_play
-                reset_ep = reset_ep or ctrl_reset_ep
-                all_names.extend(ctrl_action["action"])
-                all_args.update(ctrl_action["action_args"])
-            action = {"action": tuple(all_names), "action_args": all_args}
+            action, end_play, reset_ep = ctrl_helper.update(obs)
 
         obs = env.step(action)
 
