@@ -43,6 +43,7 @@ import os
 import os.path as osp
 import time
 from abc import ABC, abstractmethod
+from typing import Any
 
 import gym.spaces as spaces
 import numpy as np
@@ -223,6 +224,7 @@ class HumanController(Controller):
             arm_action = None
             grasp = None
 
+        base_action: Any = None
         if base_name in ac_spaces:
             base_action_space = ac_spaces[base_name][base_k]
             base_action = np.zeros(base_action_space.shape[0])
@@ -361,6 +363,46 @@ class HumanController(Controller):
         )
 
 
+class ControllerHelper:
+    def __init__(self, env):
+        self.n_robots = len(env._sim.robots_mgr)
+        self.is_multi_agent = self.n_robots > 1
+
+        self.env = env
+        self.controllers = []
+        self.n_robots = self.n_robots
+        self.all_hxs = [None for _ in range(self.n_robots)]
+        self.active_controllers = [0, 1]
+        self.controllers = [
+            HumanController(0, self.is_multi_agent),
+            BaselinesController(
+                1,
+                self.is_multi_agent,
+                "habitat-baselines/habitat_baselines/config/rearrange/rl_hierarchical.yaml",
+                env,
+            ),
+        ]
+
+    def update(self, obs):
+        all_names = []
+        all_args = {}
+        end_play = False
+        reset_ep = False
+        for i in self.active_controllers:
+            (
+                ctrl_action,
+                ctrl_reset_ep,
+                ctrl_end_play,
+                self.all_hxs[i],
+            ) = self.controllers[i].act(obs, self.env)
+            end_play = end_play or ctrl_end_play
+            reset_ep = reset_ep or ctrl_reset_ep
+            all_names.extend(ctrl_action["action"])
+            all_args.update(ctrl_action["action_args"])
+        action = {"action": tuple(all_names), "action_args": all_args}
+        return action, end_play, reset_ep
+
+
 def play_env(env, args, config):
     render_steps_limit = None
     if args.no_render:
@@ -384,21 +426,8 @@ def play_env(env, args, config):
     gfx_measure = env.task.measurements.measures.get(
         GfxReplayMeasure.cls_uuid, None
     )
-    is_multi_agent = len(env._sim.robots_mgr) > 1
 
-    controllers = []
-    n_robots = len(env._sim.robots_mgr)
-    all_hxs = [None for _ in range(n_robots)]
-    active_controllers = [0, 1]
-    controllers = [
-        HumanController(0, is_multi_agent),
-        BaselinesController(
-            1,
-            is_multi_agent,
-            "habitat-baselines/habitat_baselines/config/rearrange/rl_hierarchical.yaml",
-            env,
-        ),
-    ]
+    ctrl_helper = ControllerHelper(env)
 
     while True:
         if render_steps_limit is not None and update_idx > render_steps_limit:
@@ -407,9 +436,11 @@ def play_env(env, args, config):
         keys = pygame.key.get_pressed()
 
         if not args.no_render and keys[pygame.K_x]:
-            active_controllers[0] = (active_controllers[0] + 1) % n_robots
+            ctrl_helper.active_controllers[0] = (
+                ctrl_helper.active_controllers[0] + 1
+            ) % ctrl_helper.n_robots
             logger.info(
-                f"Controlled agent changed. Controlling agent {active_controllers[0]}."
+                f"Controlled agent changed. Controlling agent {ctrl_helper.active_controllers[0]}."
             )
 
         end_play = False
@@ -417,20 +448,7 @@ def play_env(env, args, config):
         if args.no_render:
             action = {"action": "empty", "action_args": {}}
         else:
-            all_names = []
-            all_args = {}
-            for i in active_controllers:
-                (
-                    ctrl_action,
-                    ctrl_reset_ep,
-                    ctrl_end_play,
-                    all_hxs[i],
-                ) = controllers[i].act(obs, env)
-                end_play = end_play or ctrl_end_play
-                reset_ep = reset_ep or ctrl_reset_ep
-                all_names.extend(ctrl_action["action"])
-                all_args.update(ctrl_action["action_args"])
-            action = {"action": tuple(all_names), "action_args": all_args}
+            action, end_play, reset_ep = ctrl_helper.update(obs)
 
         obs = env.step(action)
 
