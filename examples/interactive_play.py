@@ -38,6 +38,14 @@ Change the grip type:
 To record a video: `--save-obs` This will save the video to file under `data/vids/` specified by `--save-obs-fname` (by default `vid.mp4`).
 """
 
+import ctypes
+
+# must call this before importing habitat or magnum! avoids EGL_BAD_ACCESS error on some platforms
+import sys
+
+flags = sys.getdlopenflags()
+sys.setdlopenflags(flags | ctypes.RTLD_GLOBAL)
+
 import argparse
 import os
 import os.path as osp
@@ -63,6 +71,11 @@ from habitat.core.logging import logger
 from habitat.tasks.rearrange.actions.actions import ArmEEAction
 from habitat.tasks.rearrange.rearrange_sensors import GfxReplayMeasure
 from habitat.tasks.rearrange.utils import write_gfx_replay
+from habitat.utils.gui_app_wrapper import (
+    GuiAppWrapper,
+    RenderWrapper,
+    SimWrapper,
+)
 from habitat.utils.render_wrapper import overlay_frame
 from habitat.utils.visualizations.utils import observations_to_image
 from habitat_baselines.common.baseline_registry import baseline_registry
@@ -83,10 +96,22 @@ try:
 except ImportError:
     pygame = None
 
+use_pygame = False  # select OS/window backend: Magnum or pygame
+if not use_pygame:
+    use_replay_batch_renderer = True  # choose classic or batch renderer
+    import magnum as mn
+
+    import habitat_sim
+    from habitat_sim import ReplayRenderer, ReplayRendererConfiguration
+
 DEFAULT_CFG = "benchmark/rearrange/play.yaml"
 DEFAULT_RENDER_STEPS_LIMIT = 60
 SAVE_VIDEO_DIR = "./data/vids"
 SAVE_ACTIONS_DIR = "./data/interactive_play_replays"
+
+
+def get_keys():
+    return pygame.key.get_pressed() if use_pygame else [False] * 300
 
 
 class Controller(ABC):
@@ -231,7 +256,7 @@ class HumanController(Controller):
         else:
             base_action = None
 
-        keys = pygame.key.get_pressed()
+        keys = get_keys()
         should_end = False
         should_reset = False
 
@@ -433,7 +458,7 @@ def play_env(env, args, config):
         if render_steps_limit is not None and update_idx > render_steps_limit:
             break
 
-        keys = pygame.key.get_pressed()
+        keys = get_keys()
 
         if not args.no_render and keys[pygame.K_x]:
             ctrl_helper.active_controllers[0] = (
@@ -559,6 +584,101 @@ def has_pygame():
     return pygame is not None
 
 
+class PlaySimWrapper(SimWrapper):
+    def __init__(self, config):
+        # todo: remove the debug/third-person sensor
+        with habitat.config.read_write(config):
+            config.habitat.simulator.habitat_sim_v0.enable_gfx_replay_save = (
+                True
+            )
+        self.env = habitat.Env(config=config)
+        self.obs = self.env.reset()
+
+        self.ctrl_helper = ControllerHelper(self.env)
+
+    def sim_update(self, dt):
+        # todo: pipe end_play somewhere
+        action, end_play, reset_ep = self.ctrl_helper.update(self.obs)
+
+        self.obs = self.env.step(action)
+
+        post_sim_update_dict = {}
+
+        # todo: get sim object from sim articulated_object_mgr instead of from task
+        robot_root = self.env.task.actions[
+            "agent_0_base_velocity"
+        ].cur_robot.sim_obj.transformation
+        lookat = robot_root.translation + mn.Vector3(0, 1, 0)
+        cam_transform = mn.Matrix4.look_at(
+            lookat + mn.Vector3(1, 0, 1),
+            lookat,
+            mn.Vector3(0, 1, 0),
+        )
+        post_sim_update_dict["cam_transform"] = cam_transform
+
+        post_sim_update_dict[
+            "keyframes"
+        ] = self.env._sim.gfx_replay_manager.write_saved_keyframes_to_string_array(
+            True
+        )
+
+        return post_sim_update_dict
+
+
+class ReplayRenderWrapper(RenderWrapper):
+    def __init__(self, width, height):
+        # arbitrary uuid
+        self._sensor_uuid = "rgb_camera"
+
+        cfg = ReplayRendererConfiguration()
+        cfg.num_environments = 1
+        cfg.standalone = False  # Context is owned by the GLFW window
+        camera_sensor_spec = habitat_sim.CameraSensorSpec()
+        camera_sensor_spec.sensor_type = habitat_sim.SensorType.COLOR
+        camera_sensor_spec.uuid = self._sensor_uuid
+        camera_sensor_spec.resolution = [
+            height,
+            width,
+        ]
+        camera_sensor_spec.position = np.array([0, 0, 0])
+        camera_sensor_spec.orientation = np.array([0, 0, 0])
+
+        cfg.sensor_specifications = [camera_sensor_spec]
+        cfg.gpu_device_id = 0  # todo
+        cfg.force_separate_semantic_scene_graph = False
+        cfg.leave_context_with_background_renderer = False
+        self._replay_renderer = (
+            ReplayRenderer.create_batch_replay_renderer(cfg)
+            if use_replay_batch_renderer
+            else ReplayRenderer.create_classic_replay_renderer(cfg)
+        )
+
+    def post_sim_update(self, post_sim_update_dict):
+        keyframes = post_sim_update_dict["keyframes"]
+        self.cam_transform = post_sim_update_dict["cam_transform"]
+        # # temp
+        # with open("temp_keyframe.replay.json", "w") as file:
+        #     file.write(keyframes[0])
+        # exit(1)
+        env_index = 0
+        for keyframe in keyframes:
+            self._replay_renderer.set_environment_keyframe(env_index, keyframe)
+
+    def render_update(self, dt):
+        transform = self.cam_transform
+        env_index = 0
+        self._replay_renderer.set_sensor_transform(
+            env_index, self._sensor_uuid, transform
+        )
+
+        mn.gl.default_framebuffer.clear(
+            mn.gl.FramebufferClear.COLOR | mn.gl.FramebufferClear.DEPTH
+        )
+        mn.gl.default_framebuffer.bind()
+
+        self._replay_renderer.render(mn.gl.default_framebuffer)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-render", action="store_true", default=False)
@@ -664,5 +784,16 @@ if __name__ == "__main__":
             )
             task_config.actions.arm_action.arm_controller = "ArmEEAction"
 
-    with habitat.Env(config=config) as env:
-        play_env(env, args, config)
+    if use_pygame:
+        with habitat.Env(config=config) as env:
+            play_env(env, args, config)
+    else:
+        width = 800
+        height = 600
+        gui_app_wrapper = GuiAppWrapper(width, height)
+        sim_wrapper = PlaySimWrapper(config)
+        render_wrapper = ReplayRenderWrapper(width, height)
+        gui_app_wrapper.set_sim_and_render_wrappers(
+            sim_wrapper, render_wrapper
+        )
+        gui_app_wrapper.exec()
