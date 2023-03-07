@@ -38,6 +38,14 @@ Change the grip type:
 To record a video: `--save-obs` This will save the video to file under `data/vids/` specified by `--save-obs-fname` (by default `vid.mp4`).
 """
 
+import ctypes
+
+# must call this before importing habitat or magnum! avoids EGL_BAD_ACCESS error on some platforms
+import sys
+
+flags = sys.getdlopenflags()
+sys.setdlopenflags(flags | ctypes.RTLD_GLOBAL)
+
 import argparse
 import os
 import os.path as osp
@@ -65,6 +73,13 @@ from habitat.tasks.rearrange.actions.actions import ArmEEAction
 from habitat.tasks.rearrange.rearrange_sensors import GfxReplayMeasure
 from habitat.tasks.rearrange.utils import write_gfx_replay
 from habitat.utils.common import flatten_dict
+from habitat.utils.gui_app_wrapper import (
+    GuiAppWrapper,
+    ImageDrawer,
+    InputWrapper,
+    RenderWrapper,
+    SimWrapper,
+)
 from habitat.utils.visualizations.utils import (
     observations_to_image,
     overlay_frame,
@@ -92,6 +107,14 @@ except ImportError:
 
 # Please reach out to the paper authors to obtain this file
 DEFAULT_POSE_PATH = "data/humanoids/humanoid_data/walking_motion_processed.pkl"
+
+use_pygame = False  # select OS/window backend: Magnum or pygame
+if not use_pygame:
+    use_replay_batch_renderer = False  # choose classic or batch renderer
+
+    import habitat_sim
+    from habitat_sim import ReplayRenderer, ReplayRendererConfiguration
+
 DEFAULT_CFG = "benchmark/rearrange/play.yaml"
 DEFAULT_RENDER_STEPS_LIMIT = 60
 SAVE_VIDEO_DIR = "./data/vids"
@@ -199,6 +222,11 @@ class BaselinesController(Controller):
             self._env_ac, self._gym_ac_space, action_data.env_actions[0]
         )
 
+        # temp do random base actions
+        action["action_args"]["base_vel"] = torch.rand_like(
+            action["action_args"]["base_vel"]
+        )
+
         def change_ac_name(k):
             if "pddl" in k:
                 return k
@@ -214,6 +242,10 @@ class BaselinesController(Controller):
 
 
 class HumanController(Controller):
+    def __init__(self, agent_idx, is_multi_agent, gui_input):
+        super().__init__(agent_idx, is_multi_agent)
+        self._gui_input = gui_input
+
     def act(self, obs, env):
         if self._is_multi_agent:
             agent_k = f"agent_{self._agent_idx}_"
@@ -243,94 +275,97 @@ class HumanController(Controller):
         else:
             base_action = None
 
-        keys = pygame.key.get_pressed()
+        KeyNS = InputWrapper.KeyNS
+        gui_input = self._gui_input
+
         should_end = False
         should_reset = False
 
-        if keys[pygame.K_ESCAPE]:
+        if gui_input.get_key_down(KeyNS.ESC):
             should_end = True
-        elif keys[pygame.K_m]:
+        elif gui_input.get_key_down(KeyNS.M):
             should_reset = True
-        elif keys[pygame.K_n]:
+        elif gui_input.get_key_down(KeyNS.N):
             env._sim.navmesh_visualization = not env._sim.navmesh_visualization
 
         if base_action is not None:
             # Base control
-            if keys[pygame.K_j]:
+            base_action = [0, 0]
+            if gui_input.get_key(KeyNS.J):
                 # Left
-                base_action = [0, 1]
-            elif keys[pygame.K_l]:
+                base_action[1] += 1
+            if gui_input.get_key(KeyNS.L):
                 # Right
-                base_action = [0, -1]
-            elif keys[pygame.K_k]:
+                base_action[1] -= 1
+            if gui_input.get_key(KeyNS.K):
                 # Back
-                base_action = [-1, 0]
-            elif keys[pygame.K_i]:
+                base_action[0] -= 1
+            if gui_input.get_key(KeyNS.I):
                 # Forward
-                base_action = [1, 0]
+                base_action[0] += 1
 
         if isinstance(arm_ctrlr, ArmEEAction):
             EE_FACTOR = 0.5
             # End effector control
-            if keys[pygame.K_d]:
+            if gui_input.get_key_down(KeyNS.D):
                 arm_action[1] -= EE_FACTOR
-            elif keys[pygame.K_a]:
+            elif gui_input.get_key_down(KeyNS.A):
                 arm_action[1] += EE_FACTOR
-            elif keys[pygame.K_w]:
+            elif gui_input.get_key_down(KeyNS.W):
                 arm_action[0] += EE_FACTOR
-            elif keys[pygame.K_s]:
+            elif gui_input.get_key_down(KeyNS.S):
                 arm_action[0] -= EE_FACTOR
-            elif keys[pygame.K_q]:
+            elif gui_input.get_key_down(KeyNS.Q):
                 arm_action[2] += EE_FACTOR
-            elif keys[pygame.K_e]:
+            elif gui_input.get_key_down(KeyNS.E):
                 arm_action[2] -= EE_FACTOR
         else:
             # Velocity control. A different key for each joint
-            if keys[pygame.K_q]:
+            if gui_input.get_key_down(KeyNS.Q):
                 arm_action[0] = 1.0
-            elif keys[pygame.K_1]:
+            elif gui_input.get_key_down(KeyNS.ONE):
                 arm_action[0] = -1.0
 
-            elif keys[pygame.K_w]:
+            elif gui_input.get_key_down(KeyNS.W):
                 arm_action[1] = 1.0
-            elif keys[pygame.K_2]:
+            elif gui_input.get_key_down(KeyNS.TWO):
                 arm_action[1] = -1.0
 
-            elif keys[pygame.K_e]:
+            elif gui_input.get_key_down(KeyNS.E):
                 arm_action[2] = 1.0
-            elif keys[pygame.K_3]:
+            elif gui_input.get_key_down(KeyNS.THREE):
                 arm_action[2] = -1.0
 
-            elif keys[pygame.K_r]:
+            elif gui_input.get_key_down(KeyNS.R):
                 arm_action[3] = 1.0
-            elif keys[pygame.K_4]:
+            elif gui_input.get_key_down(KeyNS.FOUR):
                 arm_action[3] = -1.0
 
-            elif keys[pygame.K_t]:
+            elif gui_input.get_key_down(KeyNS.T):
                 arm_action[4] = 1.0
-            elif keys[pygame.K_5]:
+            elif gui_input.get_key_down(KeyNS.FIVE):
                 arm_action[4] = -1.0
 
-            elif keys[pygame.K_y]:
+            elif gui_input.get_key_down(KeyNS.Y):
                 arm_action[5] = 1.0
-            elif keys[pygame.K_6]:
+            elif gui_input.get_key_down(KeyNS.SIX):
                 arm_action[5] = -1.0
 
-            elif keys[pygame.K_u]:
+            elif gui_input.get_key_down(KeyNS.U):
                 arm_action[6] = 1.0
-            elif keys[pygame.K_7]:
+            elif gui_input.get_key_down(KeyNS.SEVEN):
                 arm_action[6] = -1.0
 
-        if keys[pygame.K_p]:
+        if gui_input.get_key_down(KeyNS.P):
             logger.info("[play.py]: Unsnapping")
             # Unsnap
             grasp = -1
-        elif keys[pygame.K_o]:
+        elif gui_input.get_key_down(KeyNS.O):
             # Snap
             logger.info("[play.py]: Snapping")
             grasp = 1
 
-        if keys[pygame.K_PERIOD]:
+        if gui_input.get_key_down(KeyNS.PERIOD):
             # Print the current position of the robot, useful for debugging.
             pos = [
                 float("%.3f" % x) for x in env._sim.robot.sim_obj.translation
@@ -340,7 +375,7 @@ class HumanController(Controller):
             logger.info(
                 f"Robot state: pos = {pos}, rotation = {rot}, ee_pos = {ee_pos}"
             )
-        elif keys[pygame.K_COMMA]:
+        elif gui_input.get_key_down(KeyNS.COMMA):
             # Print the current arm state of the robot, useful for debugging.
             joint_state = [
                 float("%.3f" % x) for x in env._sim.robot.arm_joint_pos
@@ -377,14 +412,18 @@ class HumanController(Controller):
 
 
 class GuiHumanoidController(Controller):
-    def __init__(self, agent_idx, is_multi_agent, env, walk_pose_path):
+    def __init__(
+        self, agent_idx, is_multi_agent, gui_input, env, walk_pose_path
+    ):
         self.agent_idx = agent_idx
         super().__init__(self.agent_idx, is_multi_agent)
         self.humanoid_controller = HumanoidRearrangeController(walk_pose_path)
         self.env = env
+        self._gui_input = gui_input
+        self._walk_dir = None
 
     def get_articulated_agent(self):
-        return env._sim.agents_mgr[self.agent_idx].articulated_agent
+        return self.env._sim.agents_mgr[self.agent_idx].articulated_agent
 
     def on_environment_reset(self):
         super().on_environment_reset()
@@ -441,26 +480,33 @@ class GuiHumanoidController(Controller):
 
         do_humanoidjoint_action = humanoidjoint_name in ac_spaces
 
-        keys = pygame.key.get_pressed()
+        KeyNS = InputWrapper.KeyNS
+        gui_input = self._gui_input
+
         should_end = False
         should_reset = False
 
-        if keys[pygame.K_ESCAPE]:
+        if gui_input.get_key_down(KeyNS.ESC):
             should_end = True
-        elif keys[pygame.K_m]:
+        elif gui_input.get_key_down(KeyNS.M):
             should_reset = True
-        elif keys[pygame.K_n]:
+        elif gui_input.get_key_down(KeyNS.N):
+            # todo: move outside this controller
             env._sim.navmesh_visualization = not env._sim.navmesh_visualization
 
         if do_humanoidjoint_action:
             humancontroller_base_user_input = [0, 0]
             # temp keyboard controls to test humanoid controller
-            if keys[pygame.K_i]:
+            if gui_input.get_key(KeyNS.I):
                 # move in world-space x+ direction ("east")
                 humancontroller_base_user_input[0] += 1
-            if keys[pygame.K_k]:
+            if gui_input.get_key(KeyNS.K):
                 # move in world-space x- direction ("west")
                 humancontroller_base_user_input[0] -= 1
+
+            if self._walk_dir:
+                humancontroller_base_user_input[0] += self._walk_dir.x
+                humancontroller_base_user_input[1] += self._walk_dir.z
 
         action_names = []
         action_args = {}
@@ -497,8 +543,8 @@ class GuiHumanoidController(Controller):
 
 
 class ControllerHelper:
-    def __init__(self, env, args):
-        self.n_robots = len(env._sim.robots_mgr)
+    def __init__(self, env, args, gui_input):
+        self.n_robots = len(env._sim.agents_mgr)
         is_multi_agent = self.n_robots > 1
 
         self.env = env
@@ -506,10 +552,10 @@ class ControllerHelper:
         gui_controller: Controller = None
         if args.use_humanoid_controller:
             gui_controller = GuiHumanoidController(
-                0, is_multi_agent, env, args.walk_pose_path
+                0, is_multi_agent, gui_input, env, args.walk_pose_path
             )
         else:
-            gui_controller = HumanController(0, is_multi_agent)
+            gui_controller = HumanController(0, is_multi_agent, gui_input)
 
         self.controllers = []
         self.n_robots = self.n_robots
@@ -573,7 +619,8 @@ def play_env(env, args, config):
         GfxReplayMeasure.cls_uuid, None
     )
 
-    ctrl_helper = ControllerHelper(env, args)
+    gui_input = None  # todo
+    ctrl_helper = ControllerHelper(env, args, gui_input)
 
     ctrl_helper.on_environment_reset()
 
@@ -587,9 +634,10 @@ def play_env(env, args, config):
         if render_steps_limit is not None and update_idx > render_steps_limit:
             break
 
-        keys = pygame.key.get_pressed()
+        KeyNS = InputWrapper.KeyNS
+        gui_input = None  # todo
 
-        if not args.no_render and keys[pygame.K_x]:
+        if not args.no_render and gui_input.get_key_down(KeyNS.x):
             ctrl_helper.active_controllers[0] = (
                 ctrl_helper.active_controllers[0] + 1
             ) % ctrl_helper.n_robots
@@ -606,7 +654,7 @@ def play_env(env, args, config):
 
         obs = env.step(action)
 
-        if not args.no_render and keys[pygame.K_c]:
+        if not args.no_render and gui_input.get_key_down(KeyNS.c):
             pddl_action = env.task.actions["PDDL_APPLY_ACTION"]
             logger.info("Actions:")
             actions = pddl_action._action_ordering
@@ -631,7 +679,7 @@ def play_env(env, args, config):
                 }
             )
 
-        if not args.no_render and keys[pygame.K_g]:
+        if not args.no_render and gui_input.get_key_down(KeyNS.g):
             pred_list = env.task.sensor_suite.sensors[
                 "all_predicates"
             ]._predicates_list
@@ -711,6 +759,236 @@ def has_pygame():
     return pygame is not None
 
 
+class PlaySimWrapper(SimWrapper):
+    def __init__(self, args, config, gui_input):
+        # todo: remove the debug/third-person sensor
+        with habitat.config.read_write(config):
+            config.habitat.simulator.habitat_sim_v0.enable_gfx_replay_save = (
+                True
+            )
+        self.env = habitat.Env(config=config)
+        self.obs = self.env.reset()
+
+        self.ctrl_helper = ControllerHelper(self.env, args, gui_input)
+
+        self.ctrl_helper.on_environment_reset()
+
+        self.cam_zoom_dist = 1.0
+        self.gui_input = gui_input
+
+        self._debug_line_render = None  # will be set later via a hack in gui_app_wrapper
+
+    def do_raycast_and_get_walk_dir(self):
+        dir = None
+        ray = self.gui_input.mouse_ray
+
+        target_y = 0.15
+
+        if not ray or ray.direction.y >= 0 or ray.origin.y <= target_y:
+            return dir
+
+        dist_to_target_y = -ray.origin.y / ray.direction.y
+
+        target = ray.origin + ray.direction * dist_to_target_y
+
+        # raycast_results = self.env._sim.cast_ray(ray=ray)
+        # if raycast_results.has_hits():
+        #     hit_info = raycast_results.hits[0]
+        #     self._debug_line_render.draw_circle(hit_info.point + mn.Vector3(0, 0.05, 0), 0.03, mn.Color3(0, 1, 0))
+
+        agent_idx = 0
+        art_obj = self.env._sim.agents_mgr[agent_idx].articulated_agent.sim_obj
+        robot_root = art_obj.transformation
+
+        pathfinder = self.env._sim.pathfinder
+        snapped_pos = pathfinder.snap_point(target)
+        snapped_start_pos = robot_root.translation
+        snapped_start_pos.y = snapped_pos.y
+
+        path = habitat_sim.ShortestPath()
+        path.requested_start = snapped_start_pos
+        path.requested_end = snapped_pos
+        found_path = pathfinder.find_path(path)
+
+        if found_path:
+            path_color = mn.Color3(0, 0, 1)
+            # skip rendering first point. It is at the object root, at the wrong height
+            for path_i in range(0, len(path.points) - 1):
+                a = mn.Vector3(path.points[path_i])
+                b = mn.Vector3(path.points[path_i + 1])
+
+                self._debug_line_render.draw_transformed_line(a, b, path_color)
+                # env.sim.viz_ids[f"next_loc_{path_i}"] = env.sim.visualize_position(
+                #     path.points[path_i], env.sim.viz_ids[f"next_loc_{path_i}"]
+                # )
+
+            end_pos = mn.Vector3(path.points[-1])
+            self._debug_line_render.draw_circle(end_pos, 0.16, path_color)
+
+            if self.gui_input.get_key(InputWrapper.KeyNS.B):
+                if len(path.points) >= 2:
+                    dir = mn.Vector3(path.points[1]) - mn.Vector3(
+                        path.points[0]
+                    )
+
+        color = mn.Color3(0, 0.5, 0) if found_path else mn.Color3(0.5, 0, 0)
+        self._debug_line_render.draw_circle(target, 0.08, color)
+
+        return dir
+
+    def sim_update(self, dt):
+        # todo: pipe end_play somewhere
+
+        walk_dir = self.do_raycast_and_get_walk_dir()
+        # hack
+        self.ctrl_helper.controllers[0]._walk_dir = walk_dir
+
+        action, end_play, reset_ep = self.ctrl_helper.update(self.obs)
+
+        self.obs = self.env.step(action)
+
+        if reset_ep:
+            self.obs = self.env.reset()
+            self.ctrl_helper.on_environment_reset()
+
+        post_sim_update_dict = {}
+
+        if self.gui_input.mouse_scroll_offset != 0:
+            zoom_sensitivity = 0.07
+            if self.gui_input.mouse_scroll_offset < 0:
+                self.cam_zoom_dist *= (
+                    1.0
+                    + -self.gui_input.mouse_scroll_offset * zoom_sensitivity
+                )
+            else:
+                self.cam_zoom_dist /= (
+                    1.0 + self.gui_input.mouse_scroll_offset * zoom_sensitivity
+                )
+            max_zoom_dist = 50.0
+            min_zoom_dist = 0.1
+            self.cam_zoom_dist = mn.math.clamp(
+                self.cam_zoom_dist, min_zoom_dist, max_zoom_dist
+            )
+
+        agent_idx = 0
+        art_obj = self.env._sim.agents_mgr[agent_idx].articulated_agent.sim_obj
+        robot_root = art_obj.transformation
+        lookat = robot_root.translation + mn.Vector3(0, 1, 0)
+        cam_transform = mn.Matrix4.look_at(
+            lookat + mn.Vector3(0.5, 1, 0.5).normalized() * self.cam_zoom_dist,
+            lookat,
+            mn.Vector3(0, 1, 0),
+        )
+        post_sim_update_dict["cam_transform"] = cam_transform
+
+        post_sim_update_dict[
+            "keyframes"
+        ] = self.env._sim.gfx_replay_manager.write_incremental_saved_keyframes_to_string_array()
+
+        # post_sim_update_dict["debug_images"] = [
+        #     observations_to_image(self.obs, {})]
+        # convert depth to RGB
+
+        def flip_vertical(obs):
+            converted_obs = np.empty_like(obs)
+            for row in range(obs.shape[0]):
+                converted_obs[row, :] = obs[obs.shape[0] - row - 1, :]
+            return converted_obs
+
+        def depth_to_rgb(obs):
+            converted_obs = np.concatenate(
+                [obs * 255.0 for _ in range(3)], axis=2
+            ).astype(np.uint8)
+            return converted_obs
+
+        # post_sim_update_dict["debug_images"] = [
+        #     flip_vertical(depth_to_rgb(self.obs["agent_1_robot_head_depth"]))
+        # ]
+
+        return post_sim_update_dict
+
+
+class ReplayRenderWrapper(RenderWrapper):
+    def __init__(self, width, height):
+        self.viewport_size = mn.Vector2i(width, height)
+        # arbitrary uuid
+        self._sensor_uuid = "rgb_camera"
+
+        cfg = ReplayRendererConfiguration()
+        cfg.num_environments = 1
+        cfg.standalone = False  # Context is owned by the GLFW window
+        camera_sensor_spec = habitat_sim.CameraSensorSpec()
+        camera_sensor_spec.sensor_type = habitat_sim.SensorType.COLOR
+        camera_sensor_spec.uuid = self._sensor_uuid
+        camera_sensor_spec.resolution = [
+            height,
+            width,
+        ]
+        camera_sensor_spec.position = np.array([0, 0, 0])
+        camera_sensor_spec.orientation = np.array([0, 0, 0])
+
+        cfg.sensor_specifications = [camera_sensor_spec]
+        cfg.gpu_device_id = 0  # todo
+        cfg.force_separate_semantic_scene_graph = False
+        cfg.leave_context_with_background_renderer = False
+        self._replay_renderer = (
+            ReplayRenderer.create_batch_replay_renderer(cfg)
+            if use_replay_batch_renderer
+            else ReplayRenderer.create_classic_replay_renderer(cfg)
+        )
+
+        self._image_drawer = ImageDrawer(max_width=1024, max_height=1024)
+        self._debug_images = []
+        self._need_render = True
+
+    def post_sim_update(self, post_sim_update_dict):
+        keyframes = post_sim_update_dict["keyframes"]
+        self.cam_transform = post_sim_update_dict["cam_transform"]
+
+        env_index = 0
+        for keyframe in keyframes:
+            self._replay_renderer.set_environment_keyframe(env_index, keyframe)
+
+        if "debug_images" in post_sim_update_dict:
+            self._debug_images = post_sim_update_dict["debug_images"]
+
+        if len(keyframes):
+            self._need_render = True
+
+    def unproject(self, viewport_pos):
+        return self._replay_renderer.unproject(0, viewport_pos)
+
+    def render_update(self, dt):
+        if not self._need_render:
+            return
+
+        # self._replay_renderer.debug_line_render(0).draw_circle(mn.Vector3(0, 1, 0), 0.25, mn.Color3(1, 0, 1))
+
+        transform = self.cam_transform
+        env_index = 0
+        self._replay_renderer.set_sensor_transform(
+            env_index, self._sensor_uuid, transform
+        )
+
+        mn.gl.default_framebuffer.clear(
+            mn.gl.FramebufferClear.COLOR | mn.gl.FramebufferClear.DEPTH
+        )
+        mn.gl.default_framebuffer.bind()
+
+        self._replay_renderer.render(mn.gl.default_framebuffer)
+
+        # arrange debug images on right side of frame, tiled down from the top
+        dest_y = 0
+        for image in self._debug_images:
+            assert isinstance(image, (np.ndarray, torch.Tensor))
+            self._image_drawer.draw(
+                image, self.viewport_size[0] - image.shape[0], dest_y
+            )
+            dest_y += image[1]
+
+        self._need_render = False
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-render", action="store_true", default=False)
@@ -777,7 +1055,7 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    if not has_pygame() and not args.no_render:
+    if use_pygame and not has_pygame() and not args.no_render:
         raise ImportError(
             "Need to install PyGame (run `pip install pygame==2.0.1`)"
         )
@@ -795,13 +1073,14 @@ if __name__ == "__main__":
         if not args.same_task:
             sim_config.debug_render = True
             agent_config = get_agent_config(sim_config=sim_config)
-            agent_config.sim_sensors.update(
-                {
-                    "third_rgb_sensor": ThirdRGBSensorConfig(
-                        height=args.play_cam_res, width=args.play_cam_res
-                    )
-                }
-            )
+            if use_pygame:
+                agent_config.sim_sensors.update(
+                    {
+                        "third_rgb_sensor": ThirdRGBSensorConfig(
+                            height=args.play_cam_res, width=args.play_cam_res
+                        )
+                    }
+                )
             if "composite_success" in task_config.measurements:
                 task_config.measurements.composite_success.must_call_stop = (
                     False
@@ -838,5 +1117,19 @@ if __name__ == "__main__":
             )
             task_config.actions.arm_action.arm_controller = "ArmEEAction"
 
-    with habitat.Env(config=config) as env:
-        play_env(env, args, config)
+    if use_pygame:
+        with habitat.Env(config=config) as env:
+            play_env(env, args, config)
+    else:
+        width = 1000  # args.play_cam_res
+        height = 640  # args.play_cam_res
+        gui_app_wrapper = GuiAppWrapper(width, height)
+        sim_wrapper = PlaySimWrapper(
+            args, config, gui_app_wrapper.get_sim_input()
+        )
+        # note this must be created after GuiAppWrapper due to OpenGL stuff
+        render_wrapper = ReplayRenderWrapper(width, height)
+        gui_app_wrapper.set_sim_and_render_wrappers(
+            sim_wrapper, render_wrapper
+        )
+        gui_app_wrapper.exec()
