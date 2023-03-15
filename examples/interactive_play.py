@@ -36,35 +36,35 @@ Change the grip type:
 - Suction gripper `task.actions.arm_action.grip_controller "SuctionGraspAction"`
 
 To record a video: `--save-obs` This will save the video to file under `data/vids/` specified by `--save-obs-fname` (by default `vid.mp4`).
-
-Record and play back trajectories:
-- To record a trajectory add `--save-actions --save-actions-count 200` to
-  record a truncated episode length of 200.
-- By default the trajectories are saved to data/interactive_play_replays/play_actions.txt
-- Play the trajectories back with `--load-actions data/interactive_play_replays/play_actions.txt`
 """
 
 import argparse
 import os
 import os.path as osp
 import time
-from collections import defaultdict
-from typing import Any, Dict, List
+from abc import ABC, abstractmethod
+from typing import Any
 
+import gym.spaces as spaces
 import magnum as mn
 import numpy as np
+import torch
 
 import habitat
+import habitat.gym.gym_wrapper as gym_wrapper
 import habitat.tasks.rearrange.rearrange_task
 from habitat.config.default import get_agent_config
 from habitat.config.default_structured_configs import (
     GfxReplayMeasureMeasurementConfig,
+    OracleNavActionConfig,
+    PddlApplyActionConfig,
     ThirdRGBSensorConfig,
 )
 from habitat.core.logging import logger
 from habitat.tasks.rearrange.actions.actions import ArmEEAction
 from habitat.tasks.rearrange.rearrange_sensors import GfxReplayMeasure
-from habitat.tasks.rearrange.utils import euler_to_quat, write_gfx_replay
+from habitat.tasks.rearrange.utils import write_gfx_replay
+from habitat.utils.common import flatten_dict
 from habitat.utils.visualizations.utils import (
     observations_to_image,
     overlay_frame,
@@ -72,6 +72,17 @@ from habitat.utils.visualizations.utils import (
 from habitat_baselines.articulated_agent_controllers import (
     HumanoidRearrangeController,
 )
+from habitat_baselines.common.baseline_registry import baseline_registry
+from habitat_baselines.common.tensor_dict import TensorDict
+from habitat_baselines.config.default import get_config as get_baselines_config
+from habitat_baselines.rl.ddppo.policy import (  # noqa: F401.
+    PointNavResNetNet,
+    PointNavResNetPolicy,
+)
+from habitat_baselines.rl.hrl.hierarchical_policy import (  # noqa: F401.
+    HierarchicalPolicy,
+)
+from habitat_baselines.utils.common import get_action_space_info
 from habitat_sim.utils import viz_utils as vut
 
 try:
@@ -87,87 +98,193 @@ SAVE_VIDEO_DIR = "./data/vids"
 SAVE_ACTIONS_DIR = "./data/interactive_play_replays"
 
 
-def step_env(env, action_name, action_args):
-    return env.step({"action": action_name, "action_args": action_args})
+class Controller(ABC):
+    def __init__(self, agent_idx, is_multi_agent):
+        self._agent_idx = agent_idx
+        self._is_multi_agent = is_multi_agent
+
+    @abstractmethod
+    def act(self, obs, env):
+        pass
+
+    def on_environment_reset(self):
+        pass
 
 
-def get_input_vel_ctlr(
-    skip_pygame,
-    arm_action,
-    env,
-    not_block_input,
-    agent_to_control,
-    control_humanoid,
-    humanoid_controller,
-):
-    if skip_pygame:
-        return step_env(env, "empty", {}), None, False
-    multi_agent = len(env._sim.agents_mgr) > 1
+def clean_dict(d, remove_prefix):
+    ret_d = {}
+    for k, v in d.spaces.items():
+        if k.startswith(remove_prefix):
+            new_k = k[len(remove_prefix) :]
+            if isinstance(v, spaces.Dict):
+                ret_d[new_k] = clean_dict(v, remove_prefix)
+            else:
+                ret_d[new_k] = v
+        elif not k.startswith("agent"):
+            ret_d[k] = v
+    return spaces.Dict(ret_d)
 
-    if multi_agent:
-        agent_k = f"agent_{agent_to_control}_"
-    else:
-        agent_k = ""
-    arm_action_name = f"{agent_k}arm_action"
 
-    if control_humanoid:
-        base_action_name = f"{agent_k}humanoidjoint_action"
-        base_key = "human_joints_trans"
-    else:
-        base_action_name = f"{agent_k}base_velocity"
-        arm_key = "arm_action"
-        grip_key = "grip_action"
-        base_key = "base_vel"
+class BaselinesController(Controller):
+    def __init__(self, agent_idx, is_multi_agent, cfg_path, env):
+        super().__init__(agent_idx, is_multi_agent)
 
-    if arm_action_name in env.action_space.spaces:
-        arm_action_space = env.action_space.spaces[arm_action_name].spaces[
-            arm_key
-        ]
-        arm_ctrlr = env.task.actions[arm_action_name].arm_ctrlr
-        base_action = None
-    elif "stretch" in DEFAULT_CFG:
-        arm_action_space = np.zeros(10)
-        arm_ctrlr = None
-        base_action = [0, 0]
-    else:
-        arm_action_space = np.zeros(7)
-        arm_ctrlr = None
-        base_action = [0, 0]
+        config = get_baselines_config(
+            cfg_path,
+            [
+                "habitat_baselines/rl/policy=hl_fixed",
+                "habitat_baselines/rl/policy/hierarchical_policy/defined_skills=oracle_skills",
+                "habitat_baselines.num_environments=1",
+            ],
+        )
+        policy_cls = baseline_registry.get_policy(
+            config.habitat_baselines.rl.policy.name
+        )
+        self._env_ac = env.action_space
+        env_obs = env.observation_space
+        self._agent_k = f"agent_{agent_idx}_"
+        if is_multi_agent:
+            self._env_ac = clean_dict(self._env_ac, self._agent_k)
+            env_obs = clean_dict(env_obs, self._agent_k)
 
-    if arm_action is None:
-        arm_action = np.zeros(arm_action_space.shape[0])
-        given_arm_action = False
-    else:
-        given_arm_action = True
+        self._gym_ac_space = gym_wrapper.create_action_space(self._env_ac)
+        gym_obs_space = gym_wrapper.smash_observation_space(
+            env_obs, list(env_obs.keys())
+        )
+        self._actor_critic = policy_cls.from_config(
+            config,
+            gym_obs_space,
+            self._gym_ac_space,
+            orig_action_space=self._env_ac,
+        )
+        self._action_shape, _ = get_action_space_info(self._gym_ac_space)
+        self._step_i = 0
 
-    end_ep = False
-    magic_grasp = None
+    def act(self, obs, env):
+        masks = torch.ones(
+            (
+                1,
+                1,
+            ),
+            dtype=torch.bool,
+        )
+        if self._step_i == 0:
+            masks = ~masks
+        self._step_i += 1
+        hxs = torch.ones(
+            (
+                1,
+                1,
+            ),
+            dtype=torch.float32,
+        )
+        prev_ac = torch.ones(
+            (
+                1,
+                self._action_shape[0],
+            ),
+            dtype=torch.float32,
+        )
+        obs = flatten_dict(obs)
+        obs = TensorDict(
+            {
+                k[len(self._agent_k) :]: torch.tensor(v).unsqueeze(0)
+                for k, v in obs.items()
+                if k.startswith(self._agent_k)
+            }
+        )
+        with torch.no_grad():
+            action_data = self._actor_critic.act(obs, hxs, prev_ac, masks)
+        action = gym_wrapper.continuous_vector_action_to_hab_dict(
+            self._env_ac, self._gym_ac_space, action_data.env_actions[0]
+        )
 
-    keys = pygame.key.get_pressed()
+        def change_ac_name(k):
+            if "pddl" in k:
+                return k
+            else:
+                return self._agent_k + k
 
-    if keys[pygame.K_ESCAPE]:
-        return None, None, False
-    elif keys[pygame.K_m]:
-        end_ep = True
-    elif keys[pygame.K_n]:
-        env._sim.navmesh_visualization = not env._sim.navmesh_visualization
+        action["action"] = [change_ac_name(k) for k in action["action"]]
+        action["action_args"] = {
+            change_ac_name(k): v.cpu().numpy()
+            for k, v in action["action_args"].items()
+        }
+        return action, False, False, action_data.rnn_hidden_states
 
-    if not_block_input:
-        # Base control
-        if keys[pygame.K_j]:
-            # Left
-            base_action = [0, 1]
-        elif keys[pygame.K_l]:
-            # Right
-            base_action = [0, -1]
-        elif keys[pygame.K_k]:
-            # Back
-            base_action = [-1, 0]
-        elif keys[pygame.K_i]:
-            # Forward
-            base_action = [1, 0]
 
-        if arm_action_space.shape[0] == 7:
+class HumanController(Controller):
+    def act(self, obs, env):
+        if self._is_multi_agent:
+            agent_k = f"agent_{self._agent_idx}_"
+        else:
+            agent_k = ""
+        arm_k = f"{agent_k}arm_action"
+        grip_k = f"{agent_k}grip_action"
+        base_k = f"{agent_k}base_vel"
+        arm_name = f"{agent_k}arm_action"
+        base_name = f"{agent_k}base_velocity"
+        ac_spaces = env.action_space.spaces
+
+        if arm_name in ac_spaces:
+            arm_action_space = ac_spaces[arm_name][arm_k]
+            arm_ctrlr = env.task.actions[arm_name].arm_ctrlr
+            arm_action = np.zeros(arm_action_space.shape[0])
+            grasp = 0
+        else:
+            arm_ctrlr = None
+            arm_action = None
+            grasp = None
+
+        base_action: Any = None
+        if base_name in ac_spaces:
+            base_action_space = ac_spaces[base_name][base_k]
+            base_action = np.zeros(base_action_space.shape[0])
+        else:
+            base_action = None
+
+        keys = pygame.key.get_pressed()
+        should_end = False
+        should_reset = False
+
+        if keys[pygame.K_ESCAPE]:
+            should_end = True
+        elif keys[pygame.K_m]:
+            should_reset = True
+        elif keys[pygame.K_n]:
+            env._sim.navmesh_visualization = not env._sim.navmesh_visualization
+
+        if base_action is not None:
+            # Base control
+            if keys[pygame.K_j]:
+                # Left
+                base_action = [0, 1]
+            elif keys[pygame.K_l]:
+                # Right
+                base_action = [0, -1]
+            elif keys[pygame.K_k]:
+                # Back
+                base_action = [-1, 0]
+            elif keys[pygame.K_i]:
+                # Forward
+                base_action = [1, 0]
+
+        if isinstance(arm_ctrlr, ArmEEAction):
+            EE_FACTOR = 0.5
+            # End effector control
+            if keys[pygame.K_d]:
+                arm_action[1] -= EE_FACTOR
+            elif keys[pygame.K_a]:
+                arm_action[1] += EE_FACTOR
+            elif keys[pygame.K_w]:
+                arm_action[0] += EE_FACTOR
+            elif keys[pygame.K_s]:
+                arm_action[0] -= EE_FACTOR
+            elif keys[pygame.K_q]:
+                arm_action[2] += EE_FACTOR
+            elif keys[pygame.K_e]:
+                arm_action[2] -= EE_FACTOR
+        else:
             # Velocity control. A different key for each joint
             if keys[pygame.K_q]:
                 arm_action[0] = 1.0
@@ -204,243 +321,185 @@ def get_input_vel_ctlr(
             elif keys[pygame.K_7]:
                 arm_action[6] = -1.0
 
-        elif arm_action_space.shape[0] == 10:
-            # Velocity control. A different key for each joint
-            if keys[pygame.K_q]:
-                arm_action[0] = 1.0
-            elif keys[pygame.K_1]:
-                arm_action[0] = -1.0
-
-            elif keys[pygame.K_w]:
-                arm_action[4] = 1.0
-            elif keys[pygame.K_2]:
-                arm_action[4] = -1.0
-
-            elif keys[pygame.K_e]:
-                arm_action[5] = 1.0
-            elif keys[pygame.K_3]:
-                arm_action[5] = -1.0
-
-            elif keys[pygame.K_r]:
-                arm_action[6] = 1.0
-            elif keys[pygame.K_4]:
-                arm_action[6] = -1.0
-
-            elif keys[pygame.K_t]:
-                arm_action[7] = 1.0
-            elif keys[pygame.K_5]:
-                arm_action[7] = -1.0
-
-            elif keys[pygame.K_y]:
-                arm_action[8] = 1.0
-            elif keys[pygame.K_6]:
-                arm_action[8] = -1.0
-
-            elif keys[pygame.K_u]:
-                arm_action[9] = 1.0
-            elif keys[pygame.K_7]:
-                arm_action[9] = -1.0
-
-        elif isinstance(arm_ctrlr, ArmEEAction):
-            EE_FACTOR = 0.5
-            # End effector control
-            if keys[pygame.K_d]:
-                arm_action[1] -= EE_FACTOR
-            elif keys[pygame.K_a]:
-                arm_action[1] += EE_FACTOR
-            elif keys[pygame.K_w]:
-                arm_action[0] += EE_FACTOR
-            elif keys[pygame.K_s]:
-                arm_action[0] -= EE_FACTOR
-            elif keys[pygame.K_q]:
-                arm_action[2] += EE_FACTOR
-            elif keys[pygame.K_e]:
-                arm_action[2] -= EE_FACTOR
-        else:
-            raise ValueError("Unrecognized arm action space")
-
         if keys[pygame.K_p]:
             logger.info("[play.py]: Unsnapping")
             # Unsnap
-            magic_grasp = -1
+            grasp = -1
         elif keys[pygame.K_o]:
             # Snap
             logger.info("[play.py]: Snapping")
-            magic_grasp = 1
+            grasp = 1
 
-    if control_humanoid:
-        if humanoid_controller is None:
-            # Add random noise to human arms but keep global transform
-            (
-                joint_trans,
-                root_trans,
-            ) = env._sim.articulated_agent.get_joint_transform()
-            # Divide joint_trans by 4 since joint_trans has flattened quaternions
-            # and the dimension of each quaternion is 4
-            num_joints = len(joint_trans) // 4
-            root_trans = np.array(root_trans)
-            index_arms_start = 10
-            joint_trans_quat = [
-                mn.Quaternion(
-                    mn.Vector3(joint_trans[(4 * index) : (4 * index + 3)]),
-                    joint_trans[4 * index + 3],
-                )
-                for index in range(num_joints)
+        if keys[pygame.K_PERIOD]:
+            # Print the current position of the robot, useful for debugging.
+            pos = [
+                float("%.3f" % x) for x in env._sim.robot.sim_obj.translation
             ]
-            rotated_joints_quat = []
-            for index, joint_quat in enumerate(joint_trans_quat):
-                random_vec = np.random.rand(3)
-                # We allow for maximum 10 angles per step
-                random_angle = np.random.rand() * 10
-                rotation_quat = mn.Quaternion.rotation(
-                    mn.Rad(random_angle), mn.Vector3(random_vec).normalized()
-                )
-                if index > index_arms_start:
-                    joint_quat *= rotation_quat
-                rotated_joints_quat.append(joint_quat)
-            joint_trans = np.concatenate(
-                [
-                    np.array(list(quat.vector) + [quat.scalar])
-                    for quat in rotated_joints_quat
-                ]
+            rot = env._sim.robot.sim_obj.rotation
+            ee_pos = env._sim.robot.ee_transform.translation
+            logger.info(
+                f"Robot state: pos = {pos}, rotation = {rot}, ee_pos = {ee_pos}"
             )
-            base_action = np.concatenate(
-                [joint_trans.reshape(-1), root_trans.transpose().reshape(-1)]
-            )
-        else:
-            # Use the controller
-            relative_pos = mn.Vector3(base_action[0], 0, base_action[1])
-            pose, root_trans = humanoid_controller.get_walk_pose(relative_pos)
-            base_action = humanoid_controller.vectorize_pose(pose, root_trans)
+        elif keys[pygame.K_COMMA]:
+            # Print the current arm state of the robot, useful for debugging.
+            joint_state = [
+                float("%.3f" % x) for x in env._sim.robot.arm_joint_pos
+            ]
 
-    if keys[pygame.K_PERIOD]:
-        # Print the current position of the articulated agent, useful for debugging.
-        pos = [
-            float("%.3f" % x)
-            for x in env._sim.articulated_agent.sim_obj.translation
-        ]
-        rot = env._sim.articulated_agent.sim_obj.rotation
-        ee_pos = env._sim.articulated_agent.ee_transform().translation
-        logger.info(
-            f"Agent state: pos = {pos}, rotation = {rot}, ee_pos = {ee_pos}"
+            logger.info(f"Robot arm joint state: {joint_state}")
+
+        action_names = []
+        action_args = {}
+        if base_action is not None:
+            action_names.append(base_name)
+            action_args.update(
+                {
+                    base_k: base_action,
+                }
+            )
+        if arm_action is not None:
+            action_names.append(arm_name)
+            action_args.update(
+                {
+                    arm_k: arm_action,
+                    grip_k: grasp,
+                }
+            )
+        if len(action_names) == 0:
+            raise ValueError("No active actions for human controller.")
+
+        return (
+            {"action": action_names, "action_args": action_args},
+            should_reset,
+            should_end,
+            {},
         )
-    elif keys[pygame.K_COMMA]:
-        # Print the current arm state of the articulated agent, useful for debugging.
-        joint_state = [
-            float("%.3f" % x) for x in env._sim.articulated_agent.arm_joint_pos
-        ]
-        logger.info(f"Agent arm joint state: {joint_state}")
-
-    args: Dict[str, Any] = {}
-    if base_action is not None and base_action_name in env.action_space.spaces:
-        name = base_action_name
-        args = {base_key: base_action}
-    else:
-        name = arm_action_name
-        if given_arm_action:
-            # The grip is also contained in the provided action
-            args = {
-                arm_key: arm_action[:-1],
-                grip_key: arm_action[-1],
-            }
-        else:
-            args = {arm_key: arm_action, grip_key: magic_grasp}
-
-    if magic_grasp is None:
-        arm_action = [*arm_action, 0.0]
-    else:
-        arm_action = [*arm_action, magic_grasp]
-
-    return step_env(env, name, args), arm_action, end_ep
 
 
-def get_wrapped_prop(venv, prop):
-    if hasattr(venv, prop):
-        return getattr(venv, prop)
-    elif hasattr(venv, "venv"):
-        return get_wrapped_prop(venv.venv, prop)
-    elif hasattr(venv, "env"):
-        return get_wrapped_prop(venv.env, prop)
+class GuiHumanoidController(Controller):
+    def __init__(self, agent_idx, is_multi_agent, env, walk_pose_path):
+        self.agent_idx = agent_idx
+        super().__init__(self.agent_idx, is_multi_agent)
+        self.humanoid_controller = HumanoidRearrangeController(walk_pose_path)
+        self.env = env
 
-    return None
+    def get_articulated_agent(self):
+        return env._sim.agents_mgr[self.agent_idx].articulated_agent
 
+    def on_environment_reset(self):
+        super().on_environment_reset()
+        base_pos = self.get_articulated_agent().base_pos
+        self.humanoid_controller.reset(base_pos)
 
-class FreeCamHelper:
-    def __init__(self):
-        self._is_free_cam_mode = False
-        self._last_pressed = 0
-        self._free_rpy = np.zeros(3)
-        self._free_xyz = np.zeros(3)
-
-    @property
-    def is_free_cam_mode(self):
-        return self._is_free_cam_mode
-
-    def update(self, env, step_result, update_idx):
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_z] and (update_idx - self._last_pressed) > 60:
-            self._is_free_cam_mode = not self._is_free_cam_mode
-            logger.info(f"Switching camera mode to {self._is_free_cam_mode}")
-            self._last_pressed = update_idx
-
-        if self._is_free_cam_mode:
-            offset_rpy = np.zeros(3)
-            if keys[pygame.K_u]:
-                offset_rpy[1] += 1
-            elif keys[pygame.K_o]:
-                offset_rpy[1] -= 1
-            elif keys[pygame.K_i]:
-                offset_rpy[2] += 1
-            elif keys[pygame.K_k]:
-                offset_rpy[2] -= 1
-            elif keys[pygame.K_j]:
-                offset_rpy[0] += 1
-            elif keys[pygame.K_l]:
-                offset_rpy[0] -= 1
-
-            offset_xyz = np.zeros(3)
-            if keys[pygame.K_q]:
-                offset_xyz[1] += 1
-            elif keys[pygame.K_e]:
-                offset_xyz[1] -= 1
-            elif keys[pygame.K_w]:
-                offset_xyz[2] += 1
-            elif keys[pygame.K_s]:
-                offset_xyz[2] -= 1
-            elif keys[pygame.K_a]:
-                offset_xyz[0] += 1
-            elif keys[pygame.K_d]:
-                offset_xyz[0] -= 1
-            offset_rpy *= 0.1
-            offset_xyz *= 0.1
-            self._free_rpy += offset_rpy
-            self._free_xyz += offset_xyz
-            if keys[pygame.K_b]:
-                self._free_rpy = np.zeros(3)
-                self._free_xyz = np.zeros(3)
-
-            quat = euler_to_quat(self._free_rpy)
-            trans = mn.Matrix4.from_(
-                quat.to_matrix(), mn.Vector3(*self._free_xyz)
+    def get_random_joint_action(self):
+        # Add random noise to human arms but keep global transform
+        (
+            joint_trans,
+            root_trans,
+        ) = self.get_articulated_agent().get_joint_transform()
+        # Divide joint_trans by 4 since joint_trans has flattened quaternions
+        # and the dimension of each quaternion is 4
+        num_joints = len(joint_trans) // 4
+        root_trans = np.array(root_trans)
+        index_arms_start = 10
+        joint_trans_quat = [
+            mn.Quaternion(
+                mn.Vector3(joint_trans[(4 * index) : (4 * index + 3)]),
+                joint_trans[4 * index + 3],
             )
-            env._sim._sensors[
-                "third_rgb"
-            ]._sensor_object.node.transformation = trans
-            step_result = env._sim.get_sensor_observations()
-            return step_result
-        return step_result
+            for index in range(num_joints)
+        ]
+        rotated_joints_quat = []
+        for index, joint_quat in enumerate(joint_trans_quat):
+            random_vec = np.random.rand(3)
+            # We allow for maximum 10 angles per step
+            random_angle = np.random.rand() * 10
+            rotation_quat = mn.Quaternion.rotation(
+                mn.Rad(random_angle), mn.Vector3(random_vec).normalized()
+            )
+            if index > index_arms_start:
+                joint_quat *= rotation_quat
+            rotated_joints_quat.append(joint_quat)
+        joint_trans = np.concatenate(
+            [
+                np.array(list(quat.vector) + [quat.scalar])
+                for quat in rotated_joints_quat
+            ]
+        )
+        humanoidjoint_action = np.concatenate(
+            [joint_trans.reshape(-1), root_trans.transpose().reshape(-1)]
+        )
+        return humanoidjoint_action
+
+    def act(self, obs, env):
+        if self._is_multi_agent:
+            agent_k = f"agent_{self._agent_idx}_"
+        else:
+            agent_k = ""
+        humanoidjoint_name = f"{agent_k}humanoidjoint_action"
+        ac_spaces = env.action_space.spaces
+
+        do_humanoidjoint_action = humanoidjoint_name in ac_spaces
+
+        keys = pygame.key.get_pressed()
+        should_end = False
+        should_reset = False
+
+        if keys[pygame.K_ESCAPE]:
+            should_end = True
+        elif keys[pygame.K_m]:
+            should_reset = True
+        elif keys[pygame.K_n]:
+            env._sim.navmesh_visualization = not env._sim.navmesh_visualization
+
+        if do_humanoidjoint_action:
+            humancontroller_base_user_input = [0, 0]
+            # temp keyboard controls to test humanoid controller
+            if keys[pygame.K_i]:
+                # move in world-space x+ direction ("east")
+                humancontroller_base_user_input[0] += 1
+            if keys[pygame.K_k]:
+                # move in world-space x- direction ("west")
+                humancontroller_base_user_input[0] -= 1
+
+        action_names = []
+        action_args = {}
+        if do_humanoidjoint_action:
+            if True:
+                relative_pos = mn.Vector3(
+                    humancontroller_base_user_input[0],
+                    0,
+                    humancontroller_base_user_input[1],
+                )
+                pose, root_trans = self.humanoid_controller.get_walk_pose(
+                    relative_pos, distance_multiplier=1.0
+                )
+                humanoidjoint_action = self.humanoid_controller.vectorize_pose(
+                    pose, root_trans
+                )
+            else:
+                pass
+                # reference code
+                # humanoidjoint_action = self.get_random_joint_action()
+            action_names.append(humanoidjoint_name)
+            action_args.update(
+                {
+                    "human_joints_trans": humanoidjoint_action,
+                }
+            )
+
+        return (
+            {"action": action_names, "action_args": action_args},
+            should_reset,
+            should_end,
+            {},
+        )
 
 
 def play_env(env, args, config):
     render_steps_limit = None
     if args.no_render:
         render_steps_limit = DEFAULT_RENDER_STEPS_LIMIT
-
-    use_arm_actions = None
-    if args.load_actions is not None:
-        with open(args.load_actions, "rb") as f:
-            use_arm_actions = np.load(f)
-            logger.info("Loaded arm actions")
 
     obs = env.reset()
 
@@ -456,53 +515,76 @@ def play_env(env, args, config):
     prev_time = time.time()
     all_obs = []
     total_reward = 0
-    all_arm_actions: List[float] = []
-    agent_to_control = 0
 
-    free_cam = FreeCamHelper()
     gfx_measure = env.task.measurements.measures.get(
         GfxReplayMeasure.cls_uuid, None
     )
     is_multi_agent = len(env._sim.agents_mgr) > 1
 
-    humanoid_controller = None
+    gui_controller: Controller = None
     if args.use_humanoid_controller:
-        humanoid_controller = HumanoidRearrangeController(args.walk_pose_path)
-        humanoid_controller.reset(env._sim.articulated_agent.base_pos)
+        gui_controller = GuiHumanoidController(
+            0, is_multi_agent, env, args.walk_pose_path
+        )
+    else:
+        gui_controller = HumanController(0, is_multi_agent)
+    controllers = []
+    n_robots = len(env._sim.agents_mgr)
+    all_hxs = [None for _ in range(n_robots)]
+    active_controllers = [0, 1]
+    controllers = [
+        gui_controller,
+        BaselinesController(
+            1,
+            is_multi_agent,
+            "habitat-baselines/habitat_baselines/config/rearrange/rl_hierarchical.yaml",
+            env,
+        ),
+    ]
+
+    for i in active_controllers:
+        controllers[i].on_environment_reset()
+
+    def reset_helper():
+        nonlocal total_reward
+        env.reset()
+        for i in active_controllers:
+            controllers[i].on_environment_reset()
+        total_reward = 0
 
     while True:
-        if (
-            args.save_actions
-            and len(all_arm_actions) > args.save_actions_count
-        ):
-            # quit the application when the action recording queue is full
-            break
         if render_steps_limit is not None and update_idx > render_steps_limit:
             break
 
-        if args.no_render:
-            keys = defaultdict(lambda: False)
-        else:
-            keys = pygame.key.get_pressed()
+        keys = pygame.key.get_pressed()
 
-        if not args.no_render and is_multi_agent and keys[pygame.K_x]:
-            agent_to_control += 1
-            agent_to_control = agent_to_control % len(env._sim.agents_mgr)
+        if not args.no_render and keys[pygame.K_x]:
+            active_controllers[0] = (active_controllers[0] + 1) % n_robots
             logger.info(
-                f"Controlled agent changed. Controlling agent {agent_to_control}."
+                f"Controlled agent changed. Controlling agent {active_controllers[0]}."
             )
 
-        step_result, arm_action, end_ep = get_input_vel_ctlr(
-            args.no_render,
-            use_arm_actions[update_idx]
-            if use_arm_actions is not None
-            else None,
-            env,
-            not free_cam.is_free_cam_mode,
-            agent_to_control,
-            args.control_humanoid,
-            humanoid_controller=humanoid_controller,
-        )
+        end_play = False
+        reset_ep = False
+        if args.no_render:
+            action = {"action": "empty", "action_args": {}}
+        else:
+            all_names = []
+            all_args = {}
+            for i in active_controllers:
+                (
+                    ctrl_action,
+                    ctrl_reset_ep,
+                    ctrl_end_play,
+                    all_hxs[i],
+                ) = controllers[i].act(obs, env)
+                end_play = end_play or ctrl_end_play
+                reset_ep = reset_ep or ctrl_reset_ep
+                all_names.extend(ctrl_action["action"])
+                all_args.update(ctrl_action["action_args"])
+            action = {"action": tuple(all_names), "action_args": all_args}
+
+        obs = env.step(action)
 
         if not args.no_render and keys[pygame.K_c]:
             pddl_action = env.task.actions["PDDL_APPLY_ACTION"]
@@ -522,38 +604,34 @@ def play_env(env, args, config):
             ac_start = pddl_action.get_pddl_action_start(action_sel)
             ac[ac_start : ac_start + len(entity_sel)] = entity_sel
 
-            step_env(env, "PDDL_APPLY_ACTION", {"pddl_action": ac})
+            env.step(
+                {
+                    "action": "PDDL_APPLY_ACTION",
+                    "action_args": {"pddl_action": ac},
+                }
+            )
 
         if not args.no_render and keys[pygame.K_g]:
             pred_list = env.task.sensor_suite.sensors[
                 "all_predicates"
             ]._predicates_list
-            pred_values = step_result["all_predicates"]
+            pred_values = obs["all_predicates"]
             logger.info("\nPredicate Truth Values:")
             for i, (pred, pred_value) in enumerate(
                 zip(pred_list, pred_values)
             ):
                 logger.info(f"{i}: {pred.compact_str} = {pred_value}")
 
-        if step_result is None:
-            break
-
-        if end_ep:
-            total_reward = 0
+        if reset_ep:
             # Clear the saved keyframes.
             if gfx_measure is not None:
                 gfx_measure.get_metric(force_get=True)
-            env.reset()
-
-        if not args.no_render:
-            step_result = free_cam.update(env, step_result, update_idx)
-
-        all_arm_actions.append(arm_action)
-        update_idx += 1
-        if use_arm_actions is not None and update_idx >= len(use_arm_actions):
+            reset_helper()
+        if end_play:
             break
 
-        obs = step_result
+        update_idx += 1
+
         info = env.get_metrics()
         reward_key = [k for k in info if "reward" in k]
         if len(reward_key) > 0:
@@ -564,15 +642,9 @@ def play_env(env, args, config):
         total_reward += reward
         info["Total Reward"] = total_reward
 
-        if free_cam.is_free_cam_mode:
-            cam = obs["third_rgb"]
-            use_ob = np.zeros(draw_obs.shape)
-            use_ob[:, : cam.shape[1]] = cam[:, :, :3]
-
-        else:
-            use_ob = observations_to_image(obs, info)
-            if not args.skip_render_text:
-                use_ob = overlay_frame(use_ob, info)
+        use_ob = observations_to_image(obs, info)
+        if not args.skip_render_text:
+            use_ob = overlay_frame(use_ob, info)
 
         draw_ob = use_ob[:]
 
@@ -587,28 +659,13 @@ def play_env(env, args, config):
         if not args.no_render:
             pygame.event.pump()
         if env.episode_over:
-            total_reward = 0
-            env.reset()
+            reset_helper()
 
         curr_time = time.time()
         diff = curr_time - prev_time
         delay = max(1.0 / target_fps - diff, 0)
         time.sleep(delay)
         prev_time = curr_time
-
-    if args.save_actions:
-        if len(all_arm_actions) < args.save_actions_count:
-            raise ValueError(
-                f"Only did {len(all_arm_actions)} actions but {args.save_actions_count} are required"
-            )
-        all_arm_actions = np.array(all_arm_actions)[: args.save_actions_count]
-        os.makedirs(SAVE_ACTIONS_DIR, exist_ok=True)
-        save_path = osp.join(SAVE_ACTIONS_DIR, args.save_actions_fname)
-        with open(save_path, "wb") as f:
-            np.save(f, all_arm_actions)
-        logger.info(f"Saved actions to {save_path}")
-        pygame.quit()
-        return
 
     if args.save_obs:
         all_obs = np.array(all_obs)  # type: ignore[assignment]
@@ -620,7 +677,7 @@ def play_env(env, args, config):
             "color",
             osp.join(SAVE_VIDEO_DIR, args.save_obs_fname),
         )
-    if gfx_measure is not None:
+    if gfx_measure is not None and args.gfx:
         gfx_str = gfx_measure.get_metric(force_get=True)
         write_gfx_replay(
             gfx_str, config.habitat.task, env.current_episode.episode_id
@@ -639,20 +696,6 @@ if __name__ == "__main__":
     parser.add_argument("--no-render", action="store_true", default=False)
     parser.add_argument("--save-obs", action="store_true", default=False)
     parser.add_argument("--save-obs-fname", type=str, default="play.mp4")
-    parser.add_argument("--save-actions", action="store_true", default=False)
-    parser.add_argument(
-        "--save-actions-fname", type=str, default="play_actions.txt"
-    )
-    parser.add_argument(
-        "--save-actions-count",
-        type=int,
-        default=200,
-        help="""
-            The number of steps the saved action trajectory is clipped to. NOTE
-            the episode must be at least this long or it will terminate with
-            error.
-            """,
-    )
     parser.add_argument("--play-cam-res", type=int, default=512)
     parser.add_argument(
         "--skip-render-text", action="store_true", default=False
@@ -724,6 +767,10 @@ if __name__ == "__main__":
         env_config = config.habitat.environment
         sim_config = config.habitat.simulator
         task_config = config.habitat.task
+        task_config.actions["pddl_apply_action"] = PddlApplyActionConfig()
+        task_config.actions[
+            "agent_1_oracle_nav_action"
+        ] = OracleNavActionConfig(agent_index=1)
 
         if not args.same_task:
             sim_config.debug_render = True
