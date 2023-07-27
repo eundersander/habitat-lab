@@ -21,6 +21,8 @@ import argparse
 from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, List, Set, Tuple
+import math
+import time
 
 import magnum as mn
 import numpy as np
@@ -49,6 +51,11 @@ from habitat.gui.gui_input import GuiInput
 from habitat.gui.replay_gui_app_renderer import ReplayGuiAppRenderer
 from habitat.gui.text_drawer import TextOnScreenAlignment
 from habitat_baselines.config.default import get_config as get_baselines_config
+
+from server.server import launch_server_process, terminate_server_process
+from cube_test import CubeTest
+
+do_network_server = True
 
 # Please reach out to the paper authors to obtain this file
 DEFAULT_POSE_PATH = (
@@ -175,6 +182,11 @@ class SandboxDriver(GuiAppDriver):
         self._num_iter_episodes: int = len(self.env.episode_iterator.episodes)  # type: ignore
         self._num_episodes_done: int = 0
         self._reset_environment()
+
+        self._cube_test = None
+        if do_network_server:
+            launch_server_process()
+            self._cube_test = CubeTest(self.get_sim())
 
     def _make_dataset(self, config):
         from habitat.datasets import make_dataset
@@ -355,6 +367,8 @@ class SandboxDriver(GuiAppDriver):
     def set_debug_line_render(self, debug_line_render):
         self._debug_line_render = debug_line_render
         self._debug_line_render.set_line_width(3)
+        if self._cube_test:
+            self._cube_test._debug_line_render = self._debug_line_render
 
     def set_text_drawer(self, text_drawer):
         self._text_drawer = text_drawer
@@ -825,6 +839,10 @@ class SandboxDriver(GuiAppDriver):
                 controls_str += "O, P: raise or lower camera\n"
                 controls_str += "Scroll: zoom\n"
 
+        # hack: showing status here in controls_str
+        if self._cube_test:
+            controls_str += f"receive rate: {self._cube_test._receive_rate_tracker.get_smoothed_rate():.1f}\n"
+
         return controls_str
 
     def _get_status_text(self):
@@ -926,10 +944,14 @@ class SandboxDriver(GuiAppDriver):
             robot_root = art_obj.transformation
             lookat = robot_root.translation + mn.Vector3(0, 1, 0)
 
+            # temp hack
+            # lookat -= mn.Vector3(0, 1.5, 0)
+
         if self._first_person_mode:
             self.cam_zoom_dist = self._min_zoom_dist
             lookat += 0.075 * robot_root.backward
             lookat -= mn.Vector3(0, 0.2, 0)
+
         offset = mn.Vector3(
             np.cos(self.lookat_offset_yaw) * np.cos(self.lookat_offset_pitch),
             np.sin(self.lookat_offset_pitch),
@@ -1076,6 +1098,9 @@ class SandboxDriver(GuiAppDriver):
         else:
             self._sim_update_tutorial(dt)
 
+        if self._cube_test:
+            self._cube_test.pre_step()
+
         # self.cam_transform is set to new value after
         # self._sim_update_controlling_agent(dt) or self._sim_update_tutorial(dt)
         post_sim_update_dict["cam_transform"] = self.cam_transform
@@ -1126,6 +1151,9 @@ class SandboxDriver(GuiAppDriver):
         ]
 
         self._update_help_text()
+
+        if self._cube_test:
+            self._cube_test.post_step()
 
         return post_sim_update_dict
 
@@ -1496,3 +1524,6 @@ if __name__ == "__main__":
     driver.set_text_drawer(app_renderer._text_drawer)
 
     gui_app_wrapper.exec()
+
+    if do_network_server:
+        terminate_server_process()
