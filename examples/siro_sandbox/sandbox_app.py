@@ -23,6 +23,7 @@ from functools import wraps
 from typing import Any, Dict, List, Set, Tuple
 import math
 import time
+import re
 
 import magnum as mn
 import numpy as np
@@ -53,9 +54,38 @@ from habitat.gui.text_drawer import TextOnScreenAlignment
 from habitat_baselines.config.default import get_config as get_baselines_config
 
 from server.server import launch_server_process, terminate_server_process
+from server.interprocess_record import send_keyframe_to_networking_thread, get_queued_client_states
 from cube_test import CubeTest
+from remote_gui_input import RemoteGuiInput
+import json
 
 do_network_server = True
+do_cube_test = False
+use_simplified_hssd_objects = True
+use_simplified_ycb_objects = True
+use_simplified_robot_meshes = True
+remove_extra_config_in_model_filepaths = True  # removes cases of "configs/../"
+use_collision_proxies_for_hssd_objects = False
+use_glb_black_list = False
+glb_black_list = [
+    "decomposed/fcbd5b4248b9d224b000d36ec0a923993d8d69d7/fcbd5b4248b9d224b000d36ec0a923993d8d69d7_part_11.glb",
+    "decomposed/3ae4103c3669dd551e1ab0982374940bf70d355a/3ae4103c3669dd551e1ab0982374940bf70d355a_part_3.glb",
+    "6/61da788a7fd67fe1a1bf270e16f458caadb0225e.glb",
+    "b/bc71f73e9f0f3ab3fee5f8a00085d8f6d51e29be.glb",
+    "f/fa86d57a2be6ef6d18ecf7a03230c0ac5f369c51.glb",
+    "d/de016d31ad24004bf75eeb8c0107e966c626133f.glb",
+    "c/c3e45e226f51e328829dcf0afc2b3baf5de0ac0c.glb",
+    "1/14eec36e26211ebb7a14a24a85800ff206c9f4ca.glb",
+    "7/79208602e24336c463c0e52f5ed94794756de9df.glb",
+    "7/76eb8317661751dd4897b39db29df5db517e2d5c.glb",
+    "0/0d1b069fb10cfdf67080e59b1bf0e73fe84151dd.glb",
+    "b/b6269374895fd9fdc7c86da11ad46a03e8b87682.glb",
+    "9/906d71ff11f2bdcea5d37916ed1fd0c77259579d.glb",
+    "e/ea4826625a4ad17e2bd2f4013acdb1c26b568999.glb",
+    "5/538f11be1a17f9f645ca8e83fd5555baa3abdf66.glb",
+    "a/a1ef5b93eaf029da57b49fb31ed5e05c01003749.glb",
+    # "004_sugar_box",  # I don't know why this is complaining so much
+]    
 
 # Please reach out to the paper authors to obtain this file
 DEFAULT_POSE_PATH = (
@@ -183,9 +213,12 @@ class SandboxDriver(GuiAppDriver):
         self._num_episodes_done: int = 0
         self._reset_environment()
 
-        self._cube_test = None
         if do_network_server:
             launch_server_process()
+            self._remote_gui_input = RemoteGuiInput()
+
+        self._cube_test = None
+        if do_cube_test:
             self._cube_test = CubeTest(self.get_sim())
 
     def _make_dataset(self, config):
@@ -369,6 +402,8 @@ class SandboxDriver(GuiAppDriver):
         self._debug_line_render.set_line_width(3)
         if self._cube_test:
             self._cube_test._debug_line_render = self._debug_line_render
+        if self._remote_gui_input:
+            self._remote_gui_input._debug_line_render = self._debug_line_render
 
     def set_text_drawer(self, text_drawer):
         self._text_drawer = text_drawer
@@ -840,8 +875,8 @@ class SandboxDriver(GuiAppDriver):
                 controls_str += "Scroll: zoom\n"
 
         # hack: showing status here in controls_str
-        if self._cube_test:
-            controls_str += f"receive rate: {self._cube_test._receive_rate_tracker.get_smoothed_rate():.1f}\n"
+        if self._remote_gui_input:
+            controls_str += f"receive rate: {self._remote_gui_input._receive_rate_tracker.get_smoothed_rate():.1f}\n"
 
         return controls_str
 
@@ -1067,6 +1102,9 @@ class SandboxDriver(GuiAppDriver):
         # todo: pipe end_play somewhere
         post_sim_update_dict: Dict[str, Any] = {}
 
+        if self._remote_gui_input:
+            self._remote_gui_input.update()
+
         if self.gui_input.get_key_down(GuiInput.KeyNS.ESC):
             self._end_episode()
             post_sim_update_dict["application_exit"] = True
@@ -1129,6 +1167,43 @@ class SandboxDriver(GuiAppDriver):
                     '"creation":{"filepath":"invalid_filepath',
                 )
 
+        for i in range(len(keyframes)):
+            if use_simplified_hssd_objects:
+                keyframes[i] = keyframes[i].replace(
+                    'data/fpss/fphab/objects',
+                    'data/hitl/simplified/fpss/fphab/objects',
+                )
+            if use_simplified_ycb_objects:
+                keyframes[i] = keyframes[i].replace(
+                    'data/objects/ycb/',
+                    'data/hitl/simplified/objects/ycb/',
+                )
+            if use_simplified_robot_meshes:
+                keyframes[i] = keyframes[i].replace(
+                    'data/robots/hab_spot_arm/',
+                    'data/hitl/simplified/robots/hab_spot_arm/',
+                )
+            if remove_extra_config_in_model_filepaths:
+                keyframes[i] = keyframes[i].replace(
+                    'configs/../',
+                    '/',
+                )
+            if use_glb_black_list:
+                for black_item in glb_black_list:
+                    keyframes[i] = keyframes[i].replace(
+                        black_item,
+                        black_item + ".invalid_filepath",
+                    )
+
+        # elif use_collision_proxies_for_hssd_objects:
+        #     import re
+        #     for i in range(len(keyframes)):
+        #         pattern = r'(/objects/[^.]+)\.glb'
+        #         replacement = r'\1.collider.glb'
+        #         keyframes[i] = re.sub(pattern, replacement, keyframes[i])
+
+
+
         post_sim_update_dict["keyframes"] = keyframes
 
         def depth_to_rgb(obs):
@@ -1154,6 +1229,16 @@ class SandboxDriver(GuiAppDriver):
 
         if self._cube_test:
             self._cube_test.post_step()
+
+        if self._remote_gui_input:
+            self._remote_gui_input.on_frame_end()
+
+        if do_network_server:
+            for keyframe_json in keyframes:
+                single_item_array = json.loads(keyframe_json)
+                assert len(single_item_array) == 1
+                keyframe_obj = single_item_array
+                send_keyframe_to_networking_thread(keyframe_obj)
 
         return post_sim_update_dict
 

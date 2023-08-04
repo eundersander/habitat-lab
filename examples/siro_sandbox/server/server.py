@@ -67,7 +67,11 @@ class Server:
 
         self._exit_event = exit_event
 
+        self._hack_first_keyframe = None
+
     async def send_keyframes(self, websocket):
+
+        did_send_hack_first_keyframe = False
 
         while True:
 
@@ -78,17 +82,28 @@ class Server:
             keyframes = get_queued_keyframes()
 
             if len(keyframes):
+
+                if not self._hack_first_keyframe:
+                    self._hack_first_keyframe = keyframes[0]
+                elif not did_send_hack_first_keyframe:
+                    # hack: resend first keyframe to new clients
+                    keyframes.insert(0, self._hack_first_keyframe)
+                did_send_hack_first_keyframe = True
+
                 # Convert keyframes to JSON string
                 keyframes_json = json.dumps(keyframes)
 
                 # Send cube poses to the client
-                keyframe_index = keyframes[-1]["keyframe_index"]
+                # keyframe_index = keyframes[-1]["keyframe_index"]
                 # if keyframe_index % 10 == 0:  # sloppy, we miss a lot of frames
                 #     print(f"sending keyframe {keyframe_index}")
                 # print(f"mock sending keyframes_json: {keyframes_json}")
                 
                 # note this awaits until the client OS has received the message
                 await websocket.send(keyframes_json)
+                # except Exception as e:
+                #     print(f"Error sending keyframe data: {e}")
+                #     break 
 
                 # limit how often we send
                 await self._send_frequency_limiter.limit_frequency_async()
@@ -140,6 +155,10 @@ class Server:
             else:
                 raise RuntimeError(f"unexpected message from client: {message}")
 
+        except Exception as e:
+            # todo: not sure if we need to close websocket connection (most errors
+            # correspond to a closed connection anyway, but maybe not all?)
+            print("error serving client: {e}")
         finally:
             # Remove the client connection from the dictionary when it disconnects
             del self._connected_clients[id(websocket)]
