@@ -61,8 +61,8 @@ function createAvatar(scene) {
       var handHeight = 0.7;
       var handOffsetY = handHeight - root.scaling.y / 2; // Offset to center the spheres
 
-      leftHand.position = new BABYLON.Vector3(-handOffset, handOffsetY, handOffset);
-      rightHand.position = new BABYLON.Vector3(handOffset, handOffsetY, handOffset);
+      leftHand.position = new BABYLON.Vector3(-handOffset, handOffsetY, -handOffset);
+      rightHand.position = new BABYLON.Vector3(handOffset, handOffsetY, -handOffset);
 
     } else {
       // If in XR mode, hands should not be parented to the root
@@ -78,9 +78,9 @@ function createAvatar(scene) {
 
       // Move the box based on key states
       if (inputMgr.getKey("w")) {
-        root.translate(BABYLON.Axis.Z, walkSpeed * deltaTime, BABYLON.Space.LOCAL);
-      } else if (inputMgr.getKey("s")) {
         root.translate(BABYLON.Axis.Z, -walkSpeed * deltaTime, BABYLON.Space.LOCAL);
+      } else if (inputMgr.getKey("s")) {
+        root.translate(BABYLON.Axis.Z, walkSpeed * deltaTime, BABYLON.Space.LOCAL);
       }
 
       // Rotate the box based on key states
@@ -140,8 +140,11 @@ function createAvatar(scene) {
 
   // Headset Pose Update: Simply update the avatar's position based on the camera's position.
   scene.onBeforeRenderObservable.add(() => {
-    if (scene.activeCamera.isVR) {
+    if (isInXR()) {
       root.position = scene.activeCamera.position.clone();
+      root.rotationQuaternion = scene.activeCamera.rotationQuaternion.clone();
+      // VR camera convention has z axis negative out instead of positive out
+      //root.rotate(BABYLON.Axis.X, Math.PI, BABYLON.Space.LOCAL);
     }
   });  
 

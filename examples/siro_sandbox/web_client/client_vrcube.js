@@ -8,6 +8,8 @@ const inputMgr = new InputManager(scene)
 
 const avatar = createAvatar(scene, inputMgr);
 
+createGuiText(scene);
+
 const isHttps = window.location.protocol === "https:";
 // If the page is served over HTTPS, use wss (WebSocket Secure). Otherwise, use ws.
 const wsProtocol = isHttps ? "wss://" : "ws://";
@@ -20,6 +22,7 @@ let xrHelper;
 
 function assert(condition, message) {
   if (!condition) {
+      console.error(message || "Assertion failed");
       throw new Error(message || "Assertion failed");
   }
 }
@@ -38,6 +41,9 @@ function setConnectionState(connected) {
 setConnectionState(false);
 
 function connectWebSocket() {
+
+  let haveReceivedValidKeyframe = false;
+
   // WebSocket setup
   ws = new WebSocket(serverAddress);
 
@@ -60,38 +66,53 @@ function connectWebSocket() {
   };
 
   ws.onmessage = function (event) {
+
     const keyframes = JSON.parse(event.data);
 
     if (keyframes.length == 0) {
       throw new Error("received empty keyframes array");
     }
-    latestKeyframe = keyframes[keyframes.length - 1]
 
-    const keyframeIdx = latestKeyframe.keyframe_index;
-    document.getElementById("keyframeIndex").textContent = keyframeIdx;
-    // todo: throw error if keyframes came out of order (and beware reconnection)
-    const cubePosesData = latestKeyframe.cube_poses
-
-    if (cubePosesData.length != cubes.length) {
-      throw new Error(`cubePosesData.length (${cubePosesData.length}) != cubes.length (${cubes.length})`);
+    if (!haveReceivedValidKeyframe) {
+      // delete old instances from an old connection
+      // see also addKeyframeToQueue
+      deleteAllInstancesFromKeyframes();
+      haveReceivedValidKeyframe = true;
     }
 
-    for (let i = 0; i < cubes.length; i++) {
-      const cubeData = cubePosesData[i];
-      const cube = cubes[i];
 
-      // Update cube pose (rotation and translation)
-      cube.rotationQuaternion = new BABYLON.Quaternion(
-        cubeData.rotation.x,
-        cubeData.rotation.y,
-        cubeData.rotation.z,
-        cubeData.rotation.w
-      );
-      cube.position = new BABYLON.Vector3(
-        cubeData.translation.x,
-        cubeData.translation.y,
-        cubeData.translation.z
-      );
+    keyframe = keyframes[0].keyframe;
+    addKeyframeToQueue(keyframe);
+
+    if (false) {
+      latestKeyframe = keyframes[keyframes.length - 1]
+
+      const keyframeIdx = latestKeyframe.keyframe_index;
+      document.getElementById("keyframeIndex").textContent = keyframeIdx;
+      // todo: throw error if keyframes came out of order (and beware reconnection)
+      const cubePosesData = latestKeyframe.cube_poses
+
+      if (cubePosesData.length != cubes.length) {
+        throw new Error(`cubePosesData.length (${cubePosesData.length}) != cubes.length (${cubes.length})`);
+      }
+
+      for (let i = 0; i < cubes.length; i++) {
+        const cubeData = cubePosesData[i];
+        const cube = cubes[i];
+
+        // Update cube pose (rotation and translation)
+        cube.rotationQuaternion = new BABYLON.Quaternion(
+          cubeData.rotation.x,
+          cubeData.rotation.y,
+          cubeData.rotation.z,
+          cubeData.rotation.w
+        );
+        cube.position = new BABYLON.Vector3(
+          cubeData.translation.x,
+          cubeData.translation.y,
+          cubeData.translation.z
+        );
+      }
     }
 
     receivedCount++;
@@ -126,8 +147,6 @@ vrButton.addEventListener("click", function () {
 
       // todo: clean these up when exiting VR
       inputMgr.addVRListeners(xrHelper);
-
-      engine.runRenderLoop(() => scene.render());
     });
   } catch (error) {
     document.getElementById("errorLog").textContent = error;
@@ -216,3 +235,8 @@ scene.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
   }
 ));
 
+setInterval(function() {
+  var fps = scene.getEngine().getFps().toFixed();  // toFixed() rounds the value to the nearest integer
+  document.getElementById("fps").textContent = fps + " fps";
+  updateGuiText(String(fps))
+}, 1000);  // Update every 1 second (1000 milliseconds)
