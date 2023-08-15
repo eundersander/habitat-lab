@@ -55,12 +55,17 @@ from cube_test import CubeTest
 from remote_gui_input import RemoteGuiInput
 import json
 from app_states.app_state_rearrange import AppStateRearrange
+from app_states.app_state_fetch import AppStateFetch
 
+from habitat.tasks.rearrange.actions.oracle_nav_action import OracleNavWithBackingUpAction
+
+do_fetch_task = False
+do_use_hack_spot_goal_pos = True and do_fetch_task
 do_network_server = False
 do_cube_test = False
-use_simplified_hssd_objects = True
-use_simplified_ycb_objects = True
-use_simplified_robot_meshes = True
+use_simplified_hssd_objects = False
+use_simplified_ycb_objects = False
+use_simplified_robot_meshes = False
 remove_extra_config_in_model_filepaths = True  # removes cases of "configs/../"
 use_collision_proxies_for_hssd_objects = False
 use_glb_black_list = False
@@ -164,36 +169,51 @@ class SandboxDriver(GuiAppDriver):
                 "--first-person-mode must be used with --gui-controlled-agent-index"
             )
 
-        def local_end_episode(do_reset=False):
-            self._end_episode(do_reset)
-
-        self._app_state_rearrange = AppStateRearrange(
-            args, 
-            config,
-            self.env,
-            self.get_sim(), 
-            gui_input,
-            self.ctrl_helper.get_gui_agent_controller(), 
-            lambda: self._compute_action_and_step_env(),
-            local_end_episode,
-            lambda: self._get_recent_metrics()
-        )            
-
-        self._num_iter_episodes: int = len(self.env.episode_iterator.episodes)  # type: ignore
-        self._num_episodes_done: int = 0
-        self._reset_environment()
-
         self._remote_gui_input = None
         if do_network_server:
             launch_server_process()
             self._remote_gui_input = RemoteGuiInput()
 
+        def local_end_episode(do_reset=False):
+            self._end_episode(do_reset)
+
+        if do_fetch_task:
+            assert self._remote_gui_input
+            self._app_state_fetch = AppStateFetch(
+                args, 
+                config,
+                self.env,
+                self.get_sim(), 
+                gui_input,
+                self._remote_gui_input,
+                self.ctrl_helper.get_gui_agent_controller(), 
+                lambda: self._compute_action_and_step_env(),
+                local_end_episode,
+                lambda: self._get_recent_metrics()
+            )  
+            self._app_state = self._app_state_fetch
+
+        else:
+            self._app_state_rearrange = AppStateRearrange(
+                args, 
+                config,
+                self.env,
+                self.get_sim(), 
+                gui_input,
+                self.ctrl_helper.get_gui_agent_controller(), 
+                lambda: self._compute_action_and_step_env(),
+                local_end_episode,
+                lambda: self._get_recent_metrics()
+            )            
+            self._app_state = self._app_state_rearrange
+
+        self._num_iter_episodes: int = len(self.env.episode_iterator.episodes)  # type: ignore
+        self._num_episodes_done: int = 0
+        self._reset_environment()
+
         self._cube_test = None
         if do_cube_test:
             self._cube_test = CubeTest(self.get_sim())
-
-        # temp; todo: set up AppState base class
-        self._app_state = self._app_state_rearrange
 
     def _make_dataset(self, config):
         from habitat.datasets import make_dataset
@@ -250,6 +270,16 @@ class SandboxDriver(GuiAppDriver):
         #     return
 
         action = self.ctrl_helper.update(self._obs)
+
+        if do_use_hack_spot_goal_pos:
+            goal_pos = self._app_state.get_fetch_goal()
+            if goal_pos:
+                goal_pos_list = [item for item in goal_pos]
+            else:
+                goal_pos_list = None
+            OracleNavWithBackingUpAction.static_nav_target = goal_pos_list
+            action["action_args"]["agent_0_oracle_nav_with_backing_up_action"] = np.array([3.0])
+
         self._env_step(action)
 
         if self._save_episode_record:
@@ -310,7 +340,7 @@ class SandboxDriver(GuiAppDriver):
         #     sim._scene_obj_ids[temp_id] for temp_id in temp_ids
         # ]
         # self._goal_positions = [mn.Vector3(pos) for pos in goal_positions_np]
-        self._app_state_rearrange.on_environment_reset()
+        self._app_state.on_environment_reset()
 
         self._sandbox_state = (
             SandboxState.TUTORIAL
@@ -362,11 +392,13 @@ class SandboxDriver(GuiAppDriver):
             self._cube_test._debug_line_render = self._debug_line_render
         if self._remote_gui_input:
             self._remote_gui_input._debug_line_render = self._debug_line_render
-        self._app_state_rearrange._debug_line_render = debug_line_render
+        # todo: do this for all app states that we might use
+        self._app_state._debug_line_render = debug_line_render
 
     def set_text_drawer(self, text_drawer):
         # self._text_drawer = text_drawer
-        self._app_state_rearrange._text_drawer = text_drawer
+        # todo: do this for all app states that we might use
+        self._app_state._text_drawer = text_drawer
 
     # trying to get around mypy complaints about missing sim attributes
     def get_sim(self) -> Any:

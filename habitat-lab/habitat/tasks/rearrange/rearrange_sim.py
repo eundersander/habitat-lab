@@ -886,6 +886,10 @@ class RearrangeSim(HabitatSim):
 
         Never call sim.step_world directly or miss updating the articulated_agent.
         """
+
+        # temp
+        # dt = 1 / 30
+
         # Optionally step physics and update the articulated_agent for benchmarking purposes
         if self._step_physics:
             t_start = time.time()

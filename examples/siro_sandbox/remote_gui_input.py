@@ -14,7 +14,7 @@ from habitat.gui.gui_input import GuiInput
 class RemoteGuiInput:
     def __init__(self):
 
-        self._latest_client_state = None
+        self._recent_client_states = []
         self._debug_line_render = None  # will be set later by user code
 
         self._receive_rate_tracker = AverageRateTracker(2.0)
@@ -40,22 +40,33 @@ class RemoteGuiInput:
     def get_gui_input(self):
         return self._gui_input
 
-    def get_head_pose(self):
+    def get_history_length(self):
+        return 4
 
-        avatar_root_json = self._latest_client_state["avatar"]["root"]
+    def get_history_timestep(self):
+        return 1 / 60
+
+    def get_head_pose(self, history_index=0):
+
+        if history_index >= len(self._recent_client_states):
+            return None, None
+
+        avatar_root_json = self._recent_client_states[history_index]["avatar"]["root"]
         pos_json = avatar_root_json["position"]
         pos = mn.Vector3(pos_json[0], pos_json[1], pos_json[2])
         rot_json = avatar_root_json["rotation"]
         rot_quat = mn.Quaternion(mn.Vector3(rot_json[0], rot_json[1], rot_json[2]), rot_json[3])
 
-        trans =  mn.Matrix4.from_(rot_quat.to_matrix(), pos)
+        return pos, rot_quat
 
-        return trans
+    def get_hand_pose(self, hand_idx, history_index=0):
 
-    def get_hand_pose(self, hand_idx):
+        if history_index >= len(self._recent_client_states):
+            return None, None
 
-        assert "hands" in self._latest_client_state["avatar"]
-        hands_json = self._latest_client_state["avatar"]["hands"]
+        client_state = self._recent_client_states[history_index]
+        assert "hands" in client_state["avatar"]
+        hands_json = client_state["avatar"]["hands"]
         assert hand_idx >= 0 and hand_idx < len(hands_json)
 
         hand_json = hands_json[hand_idx]
@@ -66,9 +77,7 @@ class RemoteGuiInput:
         # rot_quat = mn.Quaternion(mn.Vector3(rot_json["_x"], rot_json["_y"], rot_json["_z"]), rot_json["_w"])
         rot_quat = mn.Quaternion(mn.Vector3(rot_json[0], rot_json[1], rot_json[2]), rot_json[3])
 
-        trans =  mn.Matrix4.from_(rot_quat.to_matrix(), pos)
-
-        return trans
+        return pos, rot_quat
 
     def update_input_state_from_remote_client_states(self, client_states):
 
@@ -129,14 +138,12 @@ class RemoteGuiInput:
         if not self._debug_line_render:
             return
 
-        if not self._latest_client_state:
+        if not len(self._recent_client_states):
             return
-
-        assert "avatar" in self._latest_client_state
-        assert "root" in self._latest_client_state["avatar"]
         
         if True:
-            trans = self.get_head_pose()
+            pos, rot_quat = self.get_head_pose()
+            trans = mn.Matrix4.from_(rot_quat.to_matrix(), pos)
             half_size = 0.25
             self._debug_line_render.push_transform(trans)
             # self._debug_line_render.draw_box(mn.Vector3(-half_size, -half_size, -half_size), 
@@ -163,7 +170,8 @@ class RemoteGuiInput:
 
         hand_colors = (mn.Color3(255, 0, 0) / 255, mn.Color3(0, 0, 255) / 255)
         for hand_idx in range(2):
-            trans = self.get_hand_pose(hand_idx)
+            hand_pos, hand_rot_quat = self.get_hand_pose(hand_idx)
+            trans =  mn.Matrix4.from_(hand_rot_quat.to_matrix(), hand_pos)
             half_size = 0.1
             self._debug_line_render.push_transform(trans)
             self._debug_line_render.draw_box(mn.Vector3(-half_size, -half_size, -half_size), 
@@ -181,8 +189,14 @@ class RemoteGuiInput:
 
         client_states = get_queued_client_states() 
         self._receive_rate_tracker.increment(len(client_states))
-        if len(client_states):    
-            self._latest_client_state = client_states[-1]
+
+        if len(client_states) > self.get_history_length():
+            client_states = client_states[-self.get_history_length():]
+
+        for client_state in client_states:
+            self._recent_client_states.insert(0, client_state)
+            if len(self._recent_client_states) == self.get_history_length() + 1:
+                self._recent_client_states.pop()
 
         self.update_input_state_from_remote_client_states(client_states)
 

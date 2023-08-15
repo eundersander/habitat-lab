@@ -443,6 +443,8 @@ class OracleNavWithBackingUpAction(BaseVelNonCylinderAction, OracleNavAction):  
 
         return False
 
+    # static_nav_target = None
+
     def step(self, *args, is_last_action, **kwargs):
         self.skill_done = False
         nav_to_target_idx = kwargs[
@@ -460,12 +462,27 @@ class OracleNavWithBackingUpAction(BaseVelNonCylinderAction, OracleNavAction):  
         final_nav_targ, obj_targ_pos = self._get_target_for_idx(
             nav_to_target_idx
         )
+
+        # temp hack
+        # if self.static_nav_target:
+        #     final_nav_targ = self.static_nav_target
+        #     obj_targ_pos = self.static_nav_target
+        # else:
+        #     return {}
+
         # Get the base transformation
         base_T = self.cur_articulated_agent.base_transformation
         # Get the current path
         curr_path_points = self._path_to_point(final_nav_targ)
         # Get the robot position
         robot_pos = np.array(self.cur_articulated_agent.base_pos)
+
+        # temp
+        # dist_to_final_nav_targ = np.linalg.norm(
+        #     (final_nav_targ - robot_pos)[[0, 2]]
+        # )
+        # if dist_to_final_nav_targ < 1.8:
+        #     return {}
 
         if curr_path_points is None:
             raise RuntimeError("Pathfinder returns empty list")
