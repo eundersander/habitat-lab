@@ -69,7 +69,9 @@ function createAvatar(scene) {
       leftHand.parent = null;
       rightHand.parent = null;
       root.isVisible = false;
-      // hide root
+      // hide these since Babylon.js shows controllers by default anyway
+      leftHand.isVisible = false;
+      rightHand.isVisible = false;
     }
         
     if (!isInXR()) {

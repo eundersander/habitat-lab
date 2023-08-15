@@ -145,6 +145,10 @@ vrButton.addEventListener("click", function () {
         console.log("Done, WebXR is enabled.");
       }
 
+      if (xrHelper.pointerSelection) {
+        xrHelper.pointerSelection.detach();
+      }        
+
       // todo: clean these up when exiting VR
       inputMgr.addVRListeners(xrHelper);
     });
@@ -187,7 +191,7 @@ function doClientUpdate() {
 
   if (avatar.handleInputEvents) {
     avatar.handleInputEvents();
-  }
+  }3
 
   // Note that sending client state and calling inputMgr.onEndFrame are currently
   // tightly coupled; there's a notion of an "input frame", where possibly multiple

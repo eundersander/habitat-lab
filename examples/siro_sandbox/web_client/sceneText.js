@@ -4,7 +4,7 @@ var text1;
 var panel;
 var sceneRef;
 
-var disable = false;
+var disable = true;
 
 function createGuiText(scene) {
 
