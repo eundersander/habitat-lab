@@ -48,7 +48,7 @@ the_magic_constant = 42*42*4
 converter.configuration['textureCoordinateYFlipInMaterial'] = True
 converter.configuration['imageConverter'] = 'PngImageConverter' # 'BasisKtxImageConverter'
 
-def decimate(input, output, fallback_input=None, quiet=None, verbose=None):
+def decimate(input, output, fallback_input=None, quiet=None, verbose=None, sloppy=False):
 
     if quiet:
         importer.flags |= trade.ImporterFlags.QUIET
@@ -147,7 +147,7 @@ def decimate(input, output, fallback_input=None, quiet=None, verbose=None):
                 meshoptimizer.configuration['simplify'] = True
                 # You might want to enable this if the non-sloppy simplification fails
                 # to reach the target by a wide margin
-                meshoptimizer.configuration['simplifySloppy'] = False  # temp
+                meshoptimizer.configuration['simplifySloppy'] = sloppy  # temp
                 meshoptimizer.configuration['simplifyTargetIndexCountThreshold'] = target
                 decimated_mesh = meshoptimizer.convert(mesh)
 

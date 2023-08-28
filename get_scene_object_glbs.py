@@ -12,6 +12,11 @@ import glb_utils
 import decimate
 from tqdm import tqdm
 
+output_dir = "data/hitl_simplified/data/"
+omit_black_list = True
+omit_gray_list = False
+sloppy = True
+
 def file_is_scene_config(filepath: str) -> bool:
     """
     Return whether or not the file is an scene_instance.json
@@ -84,11 +89,11 @@ def process_model(args):
             source_file = "/home/eundersander/projects/fphab2/objects/" + object_partial_filepath
         else:
             source_file = "/home/eundersander/projects/fp-models/" + object_partial_filepath
-        dest_file = "data/hitl/simplified/fpss/fphab/objects/" + object_partial_filepath
+        dest_file = output_dir + "fpss/fphab/objects/" + object_partial_filepath
     else:
-        # works for ycb and hab_spot_arm meshes
+        # works for ycb and hab_spot_arm meshes, and probably HSSD stage
         source_file = model_path
-        dest_file = "data/hitl/simplified/" + model_path[5:]
+        dest_file = output_dir + model_path[5:]
         object_partial_filepath = model_path
 
     dest_directory = os.path.dirname(dest_file)
@@ -100,7 +105,7 @@ def process_model(args):
     os.makedirs(dest_directory, exist_ok=True)
 
     source_tris, target_tris, simplified_tris = \
-        decimate.decimate(source_file, dest_file, quiet=True)
+        decimate.decimate(source_file, dest_file, quiet=True, sloppy=sloppy)
 
     print(f"object_partial_filepath: {object_partial_filepath}")
     print(f"source_tris: {source_tris}, target_tris: {target_tris}, simplified_tris: {simplified_tris}")
@@ -113,8 +118,12 @@ def process_model(args):
 
     if simplified_tris > target_tris * 2 and simplified_tris > 3000:
         result['list_type'] = 'black'
+        if omit_black_list:
+            os.remove(dest_file)
     elif simplified_tris > 4000:
         result['list_type'] = 'gray'
+        if omit_gray_list:
+            os.remove(dest_file)
     else:
         result['list_type'] = None
 
@@ -146,7 +155,7 @@ def simplify_models(model_filepaths):
 
     results = []
 
-    use_multiprocessing = False  # total_models > 6
+    use_multiprocessing = True  # total_models > 6
     if use_multiprocessing:
         max_processes = 6
         with Pool(processes=min(max_processes, total_models)) as pool:
@@ -171,11 +180,11 @@ def simplify_models(model_filepaths):
 
     for (i, curr_list) in enumerate([black_list, gray_list]):
         print("")
-        print("black list:" if i == 0 else "gray list")
+        print("black list" if i == 0 else "gray list" + " = [")
         for item in curr_list:
-            print(item)
-            print("https://huggingface.co/datasets/fpss/fphab/blob/main/objects/" + item)
-
+            print("    " + item + ",")
+            # print("https://huggingface.co/datasets/fpss/fphab/blob/main/objects/" + item)
+        print("]")
 
 
 def add_models_from_scenes(dataset_root_dir, scene_ids, model_filepaths):
@@ -226,37 +235,51 @@ def main():
     model_filepaths = []
 
     args = parser.parse_args()
-    # scene_ids = list(dict.fromkeys(args.scenes)) if args.scenes else []
+    scene_ids = list(dict.fromkeys(args.scenes)) if args.scenes else []
+    # sloppy = False
     # add_models_from_scenes(args.dataset_root_dir, scene_ids, model_filepaths)
 
+    # add stage
+    # sloppy = False
+    # for scene_id in scene_ids:
+    #     model_filepaths.append("data/fpss/stages/" + scene_id + ".glb")
+        
+
     # todo: get these from episode set
+    # sloppy = False
     # model_filepaths.append("data/objects/ycb/meshes/003_cracker_box/google_16k/textured.glb")
     # model_filepaths.append("data/objects/ycb/meshes/005_tomato_soup_can/google_16k/textured.glb")
     # model_filepaths.append("data/objects/ycb/meshes/024_bowl/google_16k/textured.glb")
     # model_filepaths.append("data/objects/ycb/meshes/025_mug/google_16k/textured.glb")
+    # model_filepaths.append("data/objects/ycb/meshes/009_gelatin_box/google_16k/textured.glb")
+    # model_filepaths.append("data/objects/ycb/meshes/010_potted_meat_can/google_16k/textured.glb")
+    # model_filepaths.append("data/objects/ycb/meshes/007_tuna_fish_can/google_16k/textured.glb")
+    # model_filepaths.append("data/objects/ycb/meshes/002_master_chef_can/google_16k/textured.glb")
+
 
     # these require sloppy=True
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/base.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fl.hip.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fl.uleg.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fl.lleg.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fr.hip.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fr.uleg.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fr.lleg.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hl.hip.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hl.uleg.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hl.lleg.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hr.hip.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hr.uleg.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hr.lleg.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_sh0.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_sh1.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_hr0.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_el0.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_el1.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_wr0.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_wr1.glb")
-    # model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_fngr.glb")
+    sloppy = True
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/base.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fl.hip.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fl.uleg.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fl.lleg.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fr.hip.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fr.uleg.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fr.lleg.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hl.hip.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hl.uleg.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hl.lleg.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hr.hip.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hr.uleg.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hr.lleg.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_sh0.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_sh1.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_hr0.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_el0.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_el1.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_wr0.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_wr1.glb")
+    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_fngr.glb")
 
 
     simplify_models(model_filepaths)
