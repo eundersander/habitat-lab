@@ -75,6 +75,18 @@ from habitat_baselines.utils.info_dict import (
 )
 from habitat_baselines.utils.timing import Timing
 
+from torch.profiler import profile, schedule, tensorboard_trace_handler
+
+tracing_schedule = schedule(skip_first=5, wait=5, warmup=2, active=2, repeat=1)
+trace_handler = tensorboard_trace_handler(dir_name="traces", use_gzip=True)
+profiling_context_obj = profile(
+    activities = [torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+    schedule = tracing_schedule,
+    on_trace_ready = trace_handler,
+    profile_memory = True,
+    record_shapes = True,
+    with_stack = True
+)
 
 @baseline_registry.register_trainer(name="ddppo")
 @baseline_registry.register_trainer(name="ppo")
@@ -707,7 +719,7 @@ class PPOTrainer(BaseRLTrainer):
             )
             if rank0_only()
             else contextlib.suppress()
-        ) as writer:
+        ) as writer, profiling_context_obj as prof:
             while not self.is_done():
                 profiling_wrapper.on_start_step()
                 profiling_wrapper.range_push("train update")
@@ -804,6 +816,7 @@ class PPOTrainer(BaseRLTrainer):
                     count_checkpoints += 1
 
                 profiling_wrapper.range_pop()  # train update
+                prof.step()
 
             self.envs.close()
 
