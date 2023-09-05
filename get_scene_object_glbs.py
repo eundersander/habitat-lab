@@ -13,9 +13,8 @@ import decimate
 from tqdm import tqdm
 
 output_dir = "data/hitl_simplified/data/"
-omit_black_list = True
+omit_black_list = False
 omit_gray_list = False
-sloppy = True
 
 def file_is_scene_config(filepath: str) -> bool:
     """
@@ -33,7 +32,7 @@ def find_files(root_dir: str, discriminator: Callable[[str], bool]) -> List[str]
     """
     Recursively find all filepaths under a root directory satisfying a particular constraint as defined by a discriminator function.
 
-    :param root_dir: The roor directory for the recursive search.
+    :param root_dir: The root directory for the recursive search.
     :param discriminator: The discriminator function which takes a filepath and returns a bool.
 
     :return: The list of all absolute filepaths found satisfying the discriminator.
@@ -79,17 +78,17 @@ def get_model_ids_from_scene_instance_json(filepath: str) -> List[str]:
 
 def process_model(args):
     model_path, counter, lock, total_models = args
-
-    if "/fphab/" in model_path:
+    
+    if "/fphab/" in model_path and not "/stages/" in model_path:
         parts = model_path.split('/objects/')
         assert len(parts) == 2
         object_partial_filepath = parts[1]
 
         if "decomposed" in model_path:
-            source_file = "/home/eundersander/projects/fphab2/objects/" + object_partial_filepath
+            source_file = "/home/mdcote/Documents/git/fpss/objects/" + object_partial_filepath
         else:
-            source_file = "/home/eundersander/projects/fp-models/" + object_partial_filepath
-        dest_file = output_dir + "fpss/fphab/objects/" + object_partial_filepath
+            source_file = "/home/mdcote/Documents/git/fp-models/" + object_partial_filepath
+        dest_file = output_dir + "fphab/objects/" + object_partial_filepath
     else:
         # works for ycb and hab_spot_arm meshes, and probably HSSD stage
         source_file = model_path
@@ -98,14 +97,32 @@ def process_model(args):
 
     dest_directory = os.path.dirname(dest_file)
 
-    # print(f"source_file: {source_file}")
-    # print(f"dest_file: {dest_file}")
+    if os.path.isfile(dest_file):
+        print(f"Skipping:   {source_file}")
+        result = {}
+        result['status'] = "skipped"
+        return result
+    
+
+    print(f"Processing: {source_file}")
+    #print(f"dest_file: {dest_file}")
 
     # Create all necessary subdirectories
     os.makedirs(dest_directory, exist_ok=True)
 
-    source_tris, target_tris, simplified_tris = \
-        decimate.decimate(source_file, dest_file, quiet=True, sloppy=sloppy)
+    try:
+        source_tris, target_tris, simplified_tris = \
+            decimate.decimate(source_file, dest_file, quiet=True, sloppy=False)
+    except:
+        try:
+            print(f"Unable to decimate: {source_file}. Trying sloppy.")
+            source_tris, target_tris, simplified_tris = \
+                decimate.decimate(source_file, dest_file, quiet=True, sloppy=True)
+        except:
+            print(f"Unable to decimate: {source_file}")
+            result = {}
+            result['status'] = "error"
+            return result
 
     print(f"object_partial_filepath: {object_partial_filepath}")
     print(f"source_tris: {source_tris}, target_tris: {target_tris}, simplified_tris: {simplified_tris}")
@@ -113,7 +130,8 @@ def process_model(args):
     result = {
         'source_tris': source_tris,
         'simplified_tris': simplified_tris,
-        'object_partial_filepath': object_partial_filepath
+        'object_partial_filepath': object_partial_filepath,
+        'status': "ok"
     }
 
     if simplified_tris > target_tris * 2 and simplified_tris > 3000:
@@ -142,6 +160,8 @@ def simplify_models(model_filepaths):
     gray_list = []
     black_list_tris = 0
     gray_list_tris = 0
+    total_skipped = 0
+    total_error = 0
 
     # Initialize counter and lock
     manager = Manager()
@@ -155,7 +175,7 @@ def simplify_models(model_filepaths):
 
     results = []
 
-    use_multiprocessing = True  # total_models > 6
+    use_multiprocessing = False  # total_models > 6
     if use_multiprocessing:
         max_processes = 6
         with Pool(processes=min(max_processes, total_models)) as pool:
@@ -165,15 +185,24 @@ def simplify_models(model_filepaths):
             results.append(process_model(args))
 
     for result in results:
-        total_source_tris += result['source_tris']
-        total_simplified_tris += result['simplified_tris']
-        if result['list_type'] == 'black':
-            black_list.append(result['object_partial_filepath'])
-            black_list_tris += result['simplified_tris']
-        elif result['list_type'] == 'gray':
-            gray_list.append(result['object_partial_filepath'])
-            gray_list_tris += result['simplified_tris']
+        if result['status'] == "ok":
+            total_source_tris += result['source_tris']
+            total_simplified_tris += result['simplified_tris']
+            if result['list_type'] == 'black':
+                black_list.append(result['object_partial_filepath'])
+                black_list_tris += result['simplified_tris']
+            elif result['list_type'] == 'gray':
+                gray_list.append(result['object_partial_filepath'])
+                gray_list_tris += result['simplified_tris']
+        elif result['status'] == "error":
+            total_error += 1
+        elif result['status'] == "skipped":
+            total_skipped += 1
 
+    if (total_skipped > 0):
+        print(f"Skipped {total_skipped} files.")
+    if (total_error > 0):
+        print(f"Skipped {total_error} files due to processing errors.")
     print(f"Reduced total vertex count from {total_source_tris} to {total_simplified_tris}")
     print(f"Without black list: {total_simplified_tris - black_list_tris}")
     print(f"Without gray and black list: {total_simplified_tris - black_list_tris - gray_list_tris}")
@@ -236,29 +265,24 @@ def main():
 
     args = parser.parse_args()
     scene_ids = list(dict.fromkeys(args.scenes)) if args.scenes else []
-    # sloppy = False
-    # add_models_from_scenes(args.dataset_root_dir, scene_ids, model_filepaths)
+    add_models_from_scenes(args.dataset_root_dir, scene_ids, model_filepaths)
 
     # add stage
-    # sloppy = False
-    # for scene_id in scene_ids:
-    #     model_filepaths.append("data/fpss/stages/" + scene_id + ".glb")
+    for scene_id in scene_ids:
+        model_filepaths.append(os.path.join(args.dataset_root_dir, "stages", scene_id + ".glb"))
         
 
     # todo: get these from episode set
-    # sloppy = False
-    # model_filepaths.append("data/objects/ycb/meshes/003_cracker_box/google_16k/textured.glb")
-    # model_filepaths.append("data/objects/ycb/meshes/005_tomato_soup_can/google_16k/textured.glb")
-    # model_filepaths.append("data/objects/ycb/meshes/024_bowl/google_16k/textured.glb")
-    # model_filepaths.append("data/objects/ycb/meshes/025_mug/google_16k/textured.glb")
-    # model_filepaths.append("data/objects/ycb/meshes/009_gelatin_box/google_16k/textured.glb")
-    # model_filepaths.append("data/objects/ycb/meshes/010_potted_meat_can/google_16k/textured.glb")
-    # model_filepaths.append("data/objects/ycb/meshes/007_tuna_fish_can/google_16k/textured.glb")
-    # model_filepaths.append("data/objects/ycb/meshes/002_master_chef_can/google_16k/textured.glb")
+    model_filepaths.append("data/objects/ycb/meshes/003_cracker_box/google_16k/textured.glb")
+    model_filepaths.append("data/objects/ycb/meshes/005_tomato_soup_can/google_16k/textured.glb")
+    model_filepaths.append("data/objects/ycb/meshes/024_bowl/google_16k/textured.glb")
+    model_filepaths.append("data/objects/ycb/meshes/025_mug/google_16k/textured.glb")
+    model_filepaths.append("data/objects/ycb/meshes/009_gelatin_box/google_16k/textured.glb")
+    model_filepaths.append("data/objects/ycb/meshes/010_potted_meat_can/google_16k/textured.glb")
+    model_filepaths.append("data/objects/ycb/meshes/007_tuna_fish_can/google_16k/textured.glb")
+    model_filepaths.append("data/objects/ycb/meshes/002_master_chef_can/google_16k/textured.glb")
 
 
-    # these require sloppy=True
-    sloppy = True
     model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/base.glb")
     model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fl.hip.glb")
     model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fl.uleg.glb")

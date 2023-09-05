@@ -94,8 +94,12 @@ def decimate(input, output, fallback_input=None, quiet=None, verbose=None, slopp
         # to fiddle with this heuristics, another option is calculating the mesh
         # AABB but that won't do the right thing for planar meshes.
         if not scaled_mesh.is_indexed:
+            converter.end_file()
+            importer.close()
             assert False, "i didn't bother with index-less variant for the heuristics, sorry"
         if scaled_mesh.primitive != MeshPrimitive.TRIANGLES:
+            converter.end_file()
+            importer.close()
             assert False, "i didn't bother with non-triangle meshes either, sorry"
         triangle_count = scaled_mesh.index_count//3
         total_source_tris += triangle_count
@@ -151,7 +155,7 @@ def decimate(input, output, fallback_input=None, quiet=None, verbose=None, slopp
                 meshoptimizer.configuration['simplifyTargetIndexCountThreshold'] = target
                 decimated_mesh = meshoptimizer.convert(mesh)
 
-            # If simplifcation isn't desired or if it caused the mesh to disappear, run
+            # If simplification isn't desired or if it caused the mesh to disappear, run
             # just the nondestructive optimizations
             if target >= 1.0 or decimated_mesh.vertex_count == 0:
                 meshoptimizer.configuration['simplify'] = False
