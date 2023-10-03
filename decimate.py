@@ -45,7 +45,7 @@ the_magic_constant = 42*42*4
 
 # glTF converter defaults. This makes it work with quantized inputs, however
 # decimation will un-quantize again.
-converter.configuration['textureCoordinateYFlipInMaterial'] = True
+converter.configuration['textureCoordinateYFlipInMaterial'] = False
 converter.configuration['imageConverter'] = 'PngImageConverter' # 'BasisKtxImageConverter'
 
 def decimate(input, output, fallback_input=None, quiet=None, verbose=None, sloppy=False):
