@@ -5,16 +5,29 @@
 import argparse
 import json
 import os
-from typing import Callable, List, Dict, Optional
+from typing import Callable, List, Dict, Optional, Set
 from multiprocessing import Pool, Manager, Value, Lock
 
+from pathlib import Path
 import glb_utils
 import decimate
 from tqdm import tqdm
 
-output_dir = "data/hitl_simplified/data/"
+OUTPUT_DIR = "data/hitl_simplified/data/"
 omit_black_list = False
 omit_gray_list = False
+
+class ModelPaths:
+    source_path: str
+    dest_path: str
+    simplify: bool
+
+def _get_model_paths(rel_path: str, source_root_dir: str, simplify=True) -> ModelPaths:
+    output = ModelPaths()
+    output.source_path = os.path.join(source_root_dir, rel_path)
+    output.dest_path = os.path.join(OUTPUT_DIR, rel_path)
+    output.simplify = simplify
+    return output
 
 def file_is_scene_config(filepath: str) -> bool:
     """
@@ -78,70 +91,50 @@ def get_model_ids_from_scene_instance_json(filepath: str) -> List[str]:
 
 def process_model(args):
     model_path, counter, lock, total_models = args
-    
-    if "/fphab/" in model_path and not "/stages/" in model_path:
-        parts = model_path.split('/objects/')
-        assert len(parts) == 2
-        object_partial_filepath = parts[1]
 
-        if "decomposed" in model_path:
-            source_file = "/home/mdcote/Documents/git/fpss/objects/" + object_partial_filepath
-        else:
-            source_file = "/home/mdcote/Documents/git/fp-models/" + object_partial_filepath
-        dest_file = output_dir + "fphab/objects/" + object_partial_filepath
-    else:
-        # works for ycb and hab_spot_arm meshes, and probably HSSD stage
-        source_file = model_path
-        dest_file = output_dir + model_path[5:]
-        object_partial_filepath = model_path
-
-    dest_directory = os.path.dirname(dest_file)
-
-    if os.path.isfile(dest_file):
-        print(f"Skipping:   {source_file}")
+    if os.path.isfile(model_path.dest_path):
+        print(f"Skipping:   {model_path.source_path}")
         result = {}
         result['status'] = "skipped"
         return result
     
 
-    print(f"Processing: {source_file}")
-    #print(f"dest_file: {dest_file}")
+    print(f"Processing: {model_path.source_path}")
 
     # Create all necessary subdirectories
-    os.makedirs(dest_directory, exist_ok=True)
+    os.makedirs(os.path.dirname(model_path.dest_path), exist_ok=True)
 
     try:
         source_tris, target_tris, simplified_tris = \
-            decimate.decimate(source_file, dest_file, quiet=True, sloppy=False)
+            decimate.decimate(model_path.source_path, model_path.dest_path, quiet=True, sloppy=False, simplify=model_path.simplify)
     except:
         try:
-            print(f"Unable to decimate: {source_file}. Trying sloppy.")
+            print(f"Unable to decimate: {model_path.source_path}. Trying sloppy.")
             source_tris, target_tris, simplified_tris = \
-                decimate.decimate(source_file, dest_file, quiet=True, sloppy=True)
+                decimate.decimate(model_path.source_path, model_path.dest_path, quiet=True, sloppy=model_path.simplify)
         except:
-            print(f"Unable to decimate: {source_file}")
+            print(f"Unable to decimate: {model_path.source_path}")
             result = {}
             result['status'] = "error"
             return result
 
-    print(f"object_partial_filepath: {object_partial_filepath}")
     print(f"source_tris: {source_tris}, target_tris: {target_tris}, simplified_tris: {simplified_tris}")
 
     result = {
         'source_tris': source_tris,
         'simplified_tris': simplified_tris,
-        'object_partial_filepath': object_partial_filepath,
+        'object_partial_filepath': "?",
         'status': "ok"
     }
 
     if simplified_tris > target_tris * 2 and simplified_tris > 3000:
         result['list_type'] = 'black'
         if omit_black_list:
-            os.remove(dest_file)
+            os.remove(model_path.dest_path)
     elif simplified_tris > 4000:
         result['list_type'] = 'gray'
         if omit_gray_list:
-            os.remove(dest_file)
+            os.remove(model_path.dest_path)
     else:
         result['list_type'] = None
 
@@ -216,12 +209,11 @@ def simplify_models(model_filepaths):
         print("]")
 
 
-def add_models_from_scenes(dataset_root_dir, scene_ids, model_filepaths):
-
-    fp_root_dir = dataset_root_dir
-    config_root_dir = os.path.join(fp_root_dir, "scenes-uncluttered")
+def find_model_paths_in_scenes(fphab_root_dir, scene_ids) -> List[str]:
+    model_filepaths: Set[str] = set()
+    config_root_dir = os.path.join(fphab_root_dir, "scenes-uncluttered")
     configs = find_files(config_root_dir, file_is_scene_config)
-    obj_root_dir = os.path.join(fp_root_dir, "objects")
+    obj_root_dir = os.path.join(fphab_root_dir, "objects")
     glb_files = find_files(obj_root_dir, file_is_glb)
     render_glbs = [f for f in glb_files if (".collider" not in f and ".filteredSupportSurface" not in f)]
 
@@ -240,9 +232,9 @@ def add_models_from_scenes(dataset_root_dir, scene_ids, model_filepaths):
                         if model_id+".glb" in render_glb:
                             if "part" in render_glb and "part" not in model_id:
                                 continue
-                            # perf todo: consider a set instead of a list
-                            if render_glb not in model_filepaths:
-                                model_filepaths.append(render_glb)
+                            model_filepaths.add(render_glb)
+
+    return model_filepaths
 
 
 def main():
@@ -250,9 +242,14 @@ def main():
         description="Get all .glb render asset files associated with a given scene."
     )
     parser.add_argument(
-        "--dataset-root-dir",
+        "--fphab-root-dir",
         type=str,
-        help="path to HSSD SceneDataset root directory containing 'fphab-uncluttered.scene_dataset_config.json'.",
+        help="Path to HSSD SceneDataset root directory containing 'fphab-uncluttered.scene_dataset_config.json'.",
+    )
+    parser.add_argument(
+        "--fp-models-root-dir",
+        type=str,
+        help="Path to fp-models root directory.",
     )
     parser.add_argument(
         "--scenes",
@@ -261,52 +258,62 @@ def main():
         help="one or more scene ids",
     )
 
-    model_filepaths = []
+    model_paths: List[ModelPaths] = []
 
     args = parser.parse_args()
     scene_ids = list(dict.fromkeys(args.scenes)) if args.scenes else []
-    add_models_from_scenes(args.dataset_root_dir, scene_ids, model_filepaths)
+    
+    if args.fphab_root_dir[-1] != "/":
+        args.fp_models_root_dir += "/"
+    if args.fphab_root_dir[-1] != "/":
+        args.fp_models_root_dir += "/"
 
     # add stage
     for scene_id in scene_ids:
-        model_filepaths.append(os.path.join(args.dataset_root_dir, "stages", scene_id + ".glb"))
-        
+        rel_path = os.path.join("stages", scene_id + ".glb")
+        pth = ModelPaths()
+        pth.source_path = os.path.join(args.fphab_root_dir, rel_path)
+        pth.dest_path = os.path.join(OUTPUT_DIR, "fpss", rel_path)
+        pth.simplify = False
+        model_paths.append(pth)
 
-    # todo: get these from episode set
-    model_filepaths.append("data/objects/ycb/meshes/003_cracker_box/google_16k/textured.glb")
-    model_filepaths.append("data/objects/ycb/meshes/005_tomato_soup_can/google_16k/textured.glb")
-    model_filepaths.append("data/objects/ycb/meshes/024_bowl/google_16k/textured.glb")
-    model_filepaths.append("data/objects/ycb/meshes/025_mug/google_16k/textured.glb")
-    model_filepaths.append("data/objects/ycb/meshes/009_gelatin_box/google_16k/textured.glb")
-    model_filepaths.append("data/objects/ycb/meshes/010_potted_meat_can/google_16k/textured.glb")
-    model_filepaths.append("data/objects/ycb/meshes/007_tuna_fish_can/google_16k/textured.glb")
-    model_filepaths.append("data/objects/ycb/meshes/002_master_chef_can/google_16k/textured.glb")
+    scene_models = find_model_paths_in_scenes(args.fphab_root_dir, scene_ids)
+    for scene_model in scene_models:
+        rel_path = scene_model[len(args.fphab_root_dir):]
+        if "decomposed" not in scene_model:
+            pth = ModelPaths()
+            # file_name = os.path.basename(scene_model)
+            # fp_model_subdir = file_name[0] # First character of file name
+            # pth.source_path = os.path.join(args.fp_models_root_dir, fp_model_subdir, file_name)
+            source_path = os.path.join(args.fp_models_root_dir, rel_path)
+            # Remove 'objects/' from path
+            parts = source_path.split('/objects/')
+            pth.source_path = os.path.join(parts[0], parts[1])
+            assert len(parts) == 2
+            pth.dest_path = os.path.join(OUTPUT_DIR, "fpss", rel_path)
+            pth.simplify = True
+            model_paths.append(pth)
+        else:
+            pth = ModelPaths()
+            pth.source_path = os.path.join(args.fphab_root_dir, rel_path)
+            pth.dest_path = os.path.join(OUTPUT_DIR, "fpss", rel_path)
+            pth.simplify = True
+            model_paths.append(pth)
 
+    # Add ycb objects
+    for filename in Path("data/objects/ycb/meshes").rglob("*.glb"):
+        rel_path = str(filename)[len("data/"):]
+        model_paths.append(_get_model_paths(rel_path, "data", simplify=False))
 
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/base.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fl.hip.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fl.uleg.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fl.lleg.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fr.hip.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fr.uleg.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/fr.lleg.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hl.hip.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hl.uleg.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hl.lleg.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hr.hip.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hr.uleg.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/hr.lleg.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_sh0.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_sh1.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_hr0.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_el0.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_el1.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_wr0.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_wr1.glb")
-    model_filepaths.append("data/robots/hab_spot_arm/urdf/../meshesColored/arm0.link_fngr.glb")
+    # Add spot models
+    for filename in Path("data/robots/hab_spot_arm/meshesColored").rglob("*.glb"):
+        rel_path = str(filename)[len("data/"):]
+        model_paths.append(_get_model_paths(rel_path, "data", simplify=False))
 
+    for model_path in model_paths:
+        print(model_path.source_path + " -> " + model_path.dest_path)
 
-    simplify_models(model_filepaths)
+    simplify_models(model_paths)
 
 if __name__ == "__main__":
     main()

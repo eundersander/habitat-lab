@@ -48,7 +48,7 @@ the_magic_constant = 42*42*4
 converter.configuration['textureCoordinateYFlipInMaterial'] = False
 converter.configuration['imageConverter'] = 'PngImageConverter' # 'BasisKtxImageConverter'
 
-def decimate(input, output, fallback_input=None, quiet=None, verbose=None, sloppy=False):
+def decimate(input, output, quiet=None, verbose=None, sloppy=False, simplify=True):
 
     if quiet:
         importer.flags |= trade.ImporterFlags.QUIET
@@ -119,9 +119,9 @@ def decimate(input, output, fallback_input=None, quiet=None, verbose=None, slopp
             # print(f"dim: {dim}")
 
             target_size0 = 0.1
-            target_count0 = 200
+            target_count0 = 1000
             target_size1 = 1.0
-            target_count1 = 500
+            target_count1 = 5000
             size = (dim.x + dim.y + dim.z) / 3
             lerp_fraction = math.lerp_inverted(target_size0, target_size1, size)
             target_count = math.lerp(target_count0, target_count1, lerp_fraction)
@@ -148,7 +148,7 @@ def decimate(input, output, fallback_input=None, quiet=None, verbose=None, slopp
 
             # Running the simplifier only if simplification is actually desired
             if target < 1.0:
-                meshoptimizer.configuration['simplify'] = True
+                meshoptimizer.configuration['simplify'] = simplify
                 # You might want to enable this if the non-sloppy simplification fails
                 # to reach the target by a wide margin
                 meshoptimizer.configuration['simplifySloppy'] = sloppy  # temp
