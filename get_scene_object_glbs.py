@@ -5,31 +5,23 @@
 import argparse
 import json
 import os
-from typing import Callable, List, Dict, Optional, Set
-from multiprocessing import Pool, Manager, Value, Lock
-
+from multiprocessing import Manager, Pool
 from pathlib import Path
-import glb_utils
+from typing import Callable, List, Set
+
 import decimate
-from tqdm import tqdm
 
 OUTPUT_DIR = "data/hitl_simplified/data/"
 FPHAB_DIR_NAME = "fpss"
 OMIT_BLACK_LIST = False
 OMIT_GRAY_LIST = False
 
+
 class Job:
     source_path: str
     dest_path: str
     simplify: bool
 
-# TODO: This helper is more confusing than helpful.
-def _create_job(rel_path: str, source_root_dir: str, simplify=True) -> Job:
-    output = Job()
-    output.source_path = os.path.join(source_root_dir, rel_path)
-    output.dest_path = os.path.join(OUTPUT_DIR, rel_path)
-    output.simplify = simplify
-    return output
 
 def file_is_scene_config(filepath: str) -> bool:
     """
@@ -97,7 +89,7 @@ def process_model(args):
     if os.path.isfile(job.dest_path):
         print(f"Skipping:   {job.source_path}")
         result = {}
-        result['status'] = "skipped"
+        result["status"] = "skipped"
         return result
 
     print(f"Processing: {job.source_path}")
@@ -106,38 +98,44 @@ def process_model(args):
     os.makedirs(os.path.dirname(job.dest_path), exist_ok=True)
 
     try:
-        source_tris, target_tris, simplified_tris = \
-            decimate.decimate(job.source_path, job.dest_path, quiet=True, sloppy=False, simplify=job.simplify)
+        source_tris, target_tris, simplified_tris = decimate.decimate(
+            job.source_path,
+            job.dest_path,
+            quiet=True,
+            sloppy=False,
+            simplify=job.simplify,
+        )
     except:
         try:
             print(f"Unable to decimate: {job.source_path}. Trying sloppy.")
-            source_tris, target_tris, simplified_tris = \
-                decimate.decimate(job.source_path, job.dest_path, quiet=True, sloppy=job.simplify)
+            source_tris, target_tris, simplified_tris = decimate.decimate(
+                job.source_path, job.dest_path, quiet=True, sloppy=job.simplify
+            )
         except:
             print(f"Unable to decimate: {job.source_path}")
             result = {}
-            result['status'] = "error"
+            result["status"] = "error"
             return result
 
     print(f"source_tris: {source_tris}, target_tris: {target_tris}, simplified_tris: {simplified_tris}")
 
     result = {
-        'source_tris': source_tris,
-        'simplified_tris': simplified_tris,
-        'source_path': job.source_path,
-        'status': "ok"
+        "source_tris": source_tris,
+        "simplified_tris": simplified_tris,
+        "source_path": job.source_path,
+        "status": "ok",
     }
 
     if simplified_tris > target_tris * 2 and simplified_tris > 3000:
-        result['list_type'] = 'black'
+        result["list_type"] = "black"
         if OMIT_BLACK_LIST:
             os.remove(job.dest_path)
     elif simplified_tris > 4000:
-        result['list_type'] = 'gray'
+        result["list_type"] = "gray"
         if OMIT_GRAY_LIST:
             os.remove(job.dest_path)
     else:
-        result['list_type'] = None
+        result["list_type"] = None
 
     with lock:
         counter.value += 1
@@ -178,23 +176,23 @@ def simplify_models(jobs: List[Job]):
             results.append(process_model(args))
 
     for result in results:
-        if result['status'] == "ok":
-            total_source_tris += result['source_tris']
-            total_simplified_tris += result['simplified_tris']
-            if result['list_type'] == 'black':
-                black_list.append(result['source_path'])
-                black_list_tris += result['simplified_tris']
-            elif result['list_type'] == 'gray':
-                gray_list.append(result['source_path'])
-                gray_list_tris += result['simplified_tris']
-        elif result['status'] == "error":
+        if result["status"] == "ok":
+            total_source_tris += result["source_tris"]
+            total_simplified_tris += result["simplified_tris"]
+            if result["list_type"] == "black":
+                black_list.append(result["source_path"])
+                black_list_tris += result["simplified_tris"]
+            elif result["list_type"] == "gray":
+                gray_list.append(result["source_path"])
+                gray_list_tris += result["simplified_tris"]
+        elif result["status"] == "error":
             total_error += 1
-        elif result['status'] == "skipped":
+        elif result["status"] == "skipped":
             total_skipped += 1
 
-    if (total_skipped > 0):
+    if total_skipped > 0:
         print(f"Skipped {total_skipped} files.")
-    if (total_error > 0):
+    if total_error > 0:
         print(f"Skipped {total_error} files due to processing errors.")
     print(f"Reduced total vertex count from {total_source_tris} to {total_simplified_tris}")
     print(f"Without black list: {total_simplified_tris - black_list_tris}")
@@ -280,15 +278,12 @@ def main():
     # Add all models contained in the scenes
     scene_models = find_model_paths_in_scenes(args.fphab_root_dir, scene_ids)
     for scene_model in scene_models:
-        rel_path = scene_model[len(args.fphab_root_dir):]
+        rel_path = scene_model[len(args.fphab_root_dir) :]
         if "decomposed" not in scene_model:
             job = Job()
-            # file_name = os.path.basename(scene_model)
-            # fp_model_subdir = file_name[0] # First character of file name
-            # pth.source_path = os.path.join(args.fp_models_root_dir, fp_model_subdir, file_name)
             source_path = os.path.join(args.fp_models_root_dir, rel_path)
-            # Remove 'objects/' from path
-            parts = source_path.split('/objects/')
+            parts = source_path.split("/objects/"
+            )  # Remove 'objects/' from path
             job.source_path = os.path.join(parts[0], parts[1])
             assert len(parts) == 2
             job.dest_path = os.path.join(OUTPUT_DIR, FPHAB_DIR_NAME, rel_path)
@@ -303,16 +298,23 @@ def main():
 
     # Add ycb objects
     for filename in Path("data/objects/ycb/meshes").rglob("*.glb"):
-        rel_path = str(filename)[len("data/"):]
-        jobs.append(_create_job(rel_path, "data", simplify=False))
+        rel_path = str(filename)[len("data/") :]
+        job = Job()
+        job.source_path = os.path.join("data", rel_path)
+        job.dest_path = os.path.join(OUTPUT_DIR, rel_path)
+        job.simplify = False
+        jobs.append(job)
 
     # Add spot models
-    for filename in Path("data/robots/hab_spot_arm/meshesColored").rglob("*.glb"):
-        rel_path = str(filename)[len("data/"):]
-        jobs.append(_create_job(rel_path, "data", simplify=False))
-
-    for job in jobs:
-        print(job.source_path + " -> " + job.dest_path)
+    for filename in Path("data/robots/hab_spot_arm/meshesColored").rglob(
+        "*.glb"
+    ):
+        rel_path = str(filename)[len("data/") :]
+        job = Job()
+        job.source_path = os.path.join("data", rel_path)
+        job.dest_path = os.path.join(OUTPUT_DIR, rel_path)
+        job.simplify = False
+        jobs.append(job)
 
     simplify_models(jobs)
 
