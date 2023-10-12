@@ -107,9 +107,9 @@ def process_model(args):
         )
     except:
         try:
-            print(f"Unable to decimate: {job.source_path}. Trying sloppy.")
+            print(f"Unable to decimate: {job.source_path}. Trying passthrough (no decimation).")
             source_tris, target_tris, simplified_tris = decimate.decimate(
-                job.source_path, job.dest_path, quiet=True, sloppy=job.simplify
+                job.source_path, job.dest_path, quiet=True, decimate=False
             )
         except:
             print(f"Unable to decimate: {job.source_path}")

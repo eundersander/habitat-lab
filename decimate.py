@@ -82,7 +82,6 @@ def decimate(input, output, quiet=None, verbose=None, sloppy=False, simplify=Tru
     total_source_tris = 0
     total_target_tris = 0
     total_simplified_tris = 0
-    num_meshes = importer.mesh_count
     for i in range(importer.mesh_count):
         mesh = importer.mesh(i)
 
@@ -93,19 +92,20 @@ def decimate(input, output, quiet=None, verbose=None, sloppy=False, simplify=Tru
         # Calculate total triangle area of the *transformed* mesh. You might want
         # to fiddle with this heuristics, another option is calculating the mesh
         # AABB but that won't do the right thing for planar meshes.
-        if not scaled_mesh.is_indexed:
-            converter.end_file()
-            importer.close()
-            assert False, "i didn't bother with index-less variant for the heuristics, sorry"
-        if scaled_mesh.primitive != MeshPrimitive.TRIANGLES:
-            converter.end_file()
-            importer.close()
-            assert False, "i didn't bother with non-triangle meshes either, sorry"
-        triangle_count = scaled_mesh.index_count//3
-        total_source_tris += triangle_count
+        if simplify:
+            if not scaled_mesh.is_indexed:
+                converter.end_file()
+                importer.close()
+                assert False, "i didn't bother with index-less variant for the heuristics, sorry"
+            if scaled_mesh.primitive != MeshPrimitive.TRIANGLES:
+                converter.end_file()
+                importer.close()
+                assert False, "i didn't bother with non-triangle meshes either, sorry"
+            triangle_count = scaled_mesh.index_count//3
+            total_source_tris += triangle_count
 
         # Perform decimation only if there's actually something, heh
-        if triangle_count:
+        if simplify and triangle_count > 0:
 
             # get scaled bounding box
             positions = scaled_mesh.attribute(trade.MeshAttribute.POSITION)
