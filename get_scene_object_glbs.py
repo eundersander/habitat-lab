@@ -287,13 +287,13 @@ def main():
             job.source_path = os.path.join(parts[0], parts[1])
             assert len(parts) == 2
             job.dest_path = os.path.join(OUTPUT_DIR, FPHAB_DIR_NAME, rel_path)
-            job.simplify = True
+            job.simplify = False
             jobs.append(job)
         else:
             job = Job()
             job.source_path = os.path.join(args.fphab_root_dir, rel_path)
             job.dest_path = os.path.join(OUTPUT_DIR, FPHAB_DIR_NAME, rel_path)
-            job.simplify = True
+            job.simplify = False
             jobs.append(job)
 
     # Add ycb objects
